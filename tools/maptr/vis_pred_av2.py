@@ -29,8 +29,10 @@ import cv2
 
 from projects.mmdet3d_plugin.datasets.map_utils.rasterize import preprocess_map
 
-CAMS = ['CAM_FRONT_LEFT','CAM_FRONT','CAM_FRONT_RIGHT',
-             'CAM_BACK_LEFT','CAM_BACK','CAM_BACK_RIGHT',]
+CAMS = ['ring_front_left', 'ring_front_center', 'ring_front_right', 
+    'ring_side_left', 'ring_rear_left', 'ring_rear_right', 'ring_side_right', 
+    # 'stereo_front_left', 'stereo_front_right',
+    ]
 # we choose these samples not because it is easy but because it is hard
 CANDIDATE=['n008-2018-08-01-15-16-36-0400_1533151184047036',
            'n008-2018-08-01-15-16-36-0400_1533151200646853',
@@ -199,7 +201,7 @@ def main():
     pc_range = cfg.point_cloud_range
 
     # get car icon
-    car_img = Image.open('./figs/lidar_car.png')
+    car_img = Image.open('./figs/car.png')
 
     # get color map: divider->r, ped->b, boundary->g
     colors_plt = ['orange', 'b', 'g']
@@ -229,46 +231,62 @@ def main():
         gt_bboxes_3d = data['gt_bboxes_3d'].data[0]
         gt_labels_3d = data['gt_labels_3d'].data[0]
 
-        pts_filename = img_metas[0]['pts_filename']
-        pts_filename = osp.basename(pts_filename)
-        pts_filename = pts_filename.replace('__LIDAR_TOP__', '_').split('.')[0]
+        scene_filename = img_metas[0]['scene_token']
+        scene_filename = osp.basename(scene_filename)
+        timestamp = img_metas[0]['timestamp']
         # import pdb;pdb.set_trace()
-        # if pts_filename not in CANDIDATE:
+        # if scene_filename not in CANDIDATE:
         #     continue
 
         with torch.no_grad():
             result = model(return_loss=False, rescale=True, **data)
-        sample_dir = osp.join(args.show_dir, pts_filename)
+        sample_dir = osp.join(args.show_dir, scene_filename)
+        sample_dir = osp.join(sample_dir, timestamp)
         mmcv.mkdir_or_exist(osp.abspath(sample_dir))
 
         filename_list = img_metas[0]['filename']
         img_path_dict = {}
         # save cam img for sample
         for filepath in filename_list:
-            filename = osp.basename(filepath)
-            filename_splits = filename.split('__')
+            filepath_splits = filepath.split('/')
             # sample_dir = filename_splits[0]
             # sample_dir = osp.join(args.show_dir, sample_dir)
             # mmcv.mkdir_or_exist(osp.abspath(sample_dir))
-            img_name = filename_splits[1] + '.jpg'
+            img_name = filepath_splits[-2] + '.jpg'
             img_path = osp.join(sample_dir,img_name)
             # img_path_list.append(img_path)
             shutil.copyfile(filepath,img_path)
-            img_path_dict[filename_splits[1]] = img_path
+            img_path_dict[filepath_splits[-2]] = img_path
          
         # surrounding view
+        resize_w = 2000
         row_1_list = []
         for cam in CAMS[:3]:
             cam_img_name = cam + '.jpg'
             cam_img = cv2.imread(osp.join(sample_dir, cam_img_name))
+            h, w, _ = cam_img.shape # (1550, 2048)
+            scale_w = float(resize_w / w)
+            resize_h = int(h*scale_w)
+            cam_img = cv2.resize(cam_img, (resize_w, resize_h), interpolation=cv2.INTER_LINEAR) # (1513, 2000)
+            if cam in ['ring_front_left', 'ring_front_right']:
+                pad_h, pad_w, c = cam_img.shape # (1513, 2000)
+                pad_h = int(w*resize_w/h) - pad_h # 2642 - 1513
+                pad_img = np.full([pad_h, pad_w, c], 255, cam_img.dtype)
+                cam_img = cv2.vconcat([pad_img, cam_img])
             row_1_list.append(cam_img)
         row_2_list = []
         for cam in CAMS[3:]:
             cam_img_name = cam + '.jpg'
             cam_img = cv2.imread(osp.join(sample_dir, cam_img_name))
+            # cam_img = cv2.flip(cam_img, 1)
+            h, w, _ = cam_img.shape
+            resize_w2 = int((resize_w*3) / 4) # 1125
+            scale_w = float(resize_w2 / w) # 1125 / 2048
+            resize_h = int(h*scale_w)
+            cam_img = cv2.resize(cam_img, (resize_w2, resize_h), interpolation=cv2.INTER_LINEAR)
             row_2_list.append(cam_img)
-        row_1_img=cv2.hconcat(row_1_list)
-        row_2_img=cv2.hconcat(row_2_list)
+        row_1_img = cv2.hconcat(row_1_list)
+        row_2_img = cv2.hconcat(row_2_list)
         cams_img = cv2.vconcat([row_1_img,row_2_img])
         cams_img_path = osp.join(sample_dir,'surroud_view.jpg')
         cv2.imwrite(cams_img_path, cams_img,[cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -293,7 +311,7 @@ def main():
                     # plt.Rectangle(xy, width, height,color=colors_plt[gt_label_3d])
                 # continue
             elif vis_format == 'fixed_num_pts':
-                plt.figure(figsize=(2, 4))
+                plt.figure(figsize=(4, 2))
                 plt.xlim(pc_range[0], pc_range[3])
                 plt.ylim(pc_range[1], pc_range[4])
                 plt.axis('off')
@@ -311,13 +329,13 @@ def main():
                     plt.scatter(x, y, color=colors_plt[gt_label_3d],s=2,alpha=0.8,zorder=-1)
                     # plt.plot(x, y, color=colors_plt[gt_label_3d])
                     # plt.scatter(x, y, color=colors_plt[gt_label_3d],s=1)
-                plt.imshow(car_img, extent=[-1.2, 1.2, -1.5, 1.5])
+                plt.imshow(car_img, extent=[-1.5, 1.5, -1.2, 1.2])
 
                 gt_fixedpts_map_path = osp.join(sample_dir, 'GT_fixednum_pts_MAP.png')
                 plt.savefig(gt_fixedpts_map_path, bbox_inches='tight', format='png',dpi=1200)
                 plt.close()   
             elif vis_format == 'polyline_pts':
-                plt.figure(figsize=(2, 4))
+                plt.figure(figsize=(4, 2))
                 plt.xlim(pc_range[0], pc_range[3])
                 plt.ylim(pc_range[1], pc_range[4])
                 plt.axis('off')
@@ -331,17 +349,17 @@ def main():
                     # plt.quiver(x[:-1], y[:-1], x[1:] - x[:-1], y[1:] - y[:-1], scale_units='xy', angles='xy', scale=1, color=colors_plt[gt_label_3d])
 
                     # plt.plot(x, y, color=colors_plt[gt_label_3d])
-                    plt.plot(x, y, color=colors_plt[gt_label_3d],linewidth=2,alpha=0.8,zorder=-1) # linewidth=1
-                    # plt.scatter(x, y, color=colors_plt[gt_label_3d],s=1,alpha=0.8,zorder=-1)
-                plt.imshow(car_img, extent=[-1.2, 1.2, -1.5, 1.5])
+                    plt.plot(x, y, color=colors_plt[gt_label_3d],linewidth=1,alpha=0.8,zorder=-1)
+                    plt.scatter(x, y, color=colors_plt[gt_label_3d],s=1,alpha=0.8,zorder=-1)
+                plt.imshow(car_img, extent=[-1.5, 1.5, -1.2, 1.2])
 
                 gt_polyline_map_path = osp.join(sample_dir, 'GT_polyline_pts_MAP.png')
                 plt.savefig(gt_polyline_map_path, bbox_inches='tight', format='png',dpi=1200)
                 plt.close()           
             elif vis_format == 'fixed_dist_pts':
-                plt.figure(figsize=(2, 4))
-                plt.xlim(pc_range[0], pc_range[3]) # -15, 15
-                plt.ylim(pc_range[1], pc_range[4]) # -30, 30
+                plt.figure(figsize=(4, 2))
+                plt.xlim(pc_range[0], pc_range[3]) # -30, 30
+                plt.ylim(pc_range[1], pc_range[4]) # -15, 15
                 plt.axis('off')
                 gt_lines_fixed_dist_pts, gt_lines_num_pts = gt_bboxes_3d[0].fixed_dist_padded_points
                 for gt_line_fixed_dist_pts, gt_line_num_pts, gt_label_3d in zip(gt_lines_fixed_dist_pts, gt_lines_num_pts, gt_labels_3d[0]):
@@ -349,9 +367,9 @@ def main():
                     x = np.array([pt[0] for pt in pts])
                     y = np.array([pt[1] for pt in pts])
                     
-                    plt.plot(x, y, color=colors_plt[gt_label_3d],linewidth=1,alpha=0.8,zorder=-1) # linewidth=1
+                    plt.plot(x, y, color=colors_plt[gt_label_3d],linewidth=1,alpha=0.8,zorder=-1)
                     plt.scatter(x, y, color=colors_plt[gt_label_3d],s=2,alpha=0.8,zorder=-1)
-                plt.imshow(car_img, extent=[-1.2, 1.2, -1.5, 1.5])
+                plt.imshow(car_img, extent=[-1.5, 1.5, -1.2, 1.2])
 
                 gt_polyline_map_path = osp.join(sample_dir, 'GT_fixeddist_pts_MAP.png')
                 plt.savefig(gt_polyline_map_path, bbox_inches='tight', format='png',dpi=1200)
@@ -364,9 +382,9 @@ def main():
                                            cfg.sample_dist,
                                            dt_threshold=10)
                 dt = mask_dict['distance_transform']
-                # vmin = np.min(dt)
-                # vmax = np.max(dt)
-                # dt = (dt - vmin) / (vmax-vmin)
+                vmin = np.min(dt)
+                vmax = np.max(dt)
+                dt = (dt - vmin) / (vmax-vmin)
                 dt_color_mask = cmap(dt.max(0))[..., :3] * 255 # 400, 200, 3
                 Image.fromarray(dt_color_mask.astype('uint8')).save(osp.join(sample_dir, 'GT_distance_transform_MAP.png'))
                 
@@ -383,6 +401,13 @@ def main():
                 logger.error(f'WRONG visformat for GT: {vis_format}')
                 raise ValueError(f'WRONG visformat for GT: {vis_format}')
 
+
+        # import pdb;pdb.set_trace()
+        plt.figure(figsize=(4, 2))
+        plt.xlim(pc_range[0], pc_range[3])
+        plt.ylim(pc_range[1], pc_range[4])
+        plt.axis('off')
+
         # visualize pred
         # import pdb;pdb.set_trace()
         result_dic = result[0]['pts_bbox']
@@ -392,7 +417,7 @@ def main():
         pts_3d = result_dic['pts_3d']
         keep = scores_3d > args.score_thresh
 
-        plt.figure(figsize=(2, 4))
+        plt.figure(figsize=(4, 2))
         plt.xlim(pc_range[0], pc_range[3])
         plt.ylim(pc_range[1], pc_range[4])
         plt.axis('off')
@@ -415,7 +440,7 @@ def main():
 
 
 
-        plt.imshow(car_img, extent=[-1.2, 1.2, -1.5, 1.5])
+        plt.imshow(car_img, extent=[-1.5, 1.5, -1.2, 1.2])
 
         map_path = osp.join(sample_dir, 'PRED_MAP_plot.png')
         plt.savefig(map_path, bbox_inches='tight', format='png',dpi=1200)

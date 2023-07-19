@@ -92,7 +92,7 @@ class LiDARInstanceLines(object):
         self.padding_value = padding_value
 
         self.instance_list = instance_line_list
-
+    
     @property
     def start_end_points(self):
         """
@@ -154,6 +154,45 @@ class LiDARInstanceLines(object):
         instance_points_tensor[:,:,0] = torch.clamp(instance_points_tensor[:,:,0], min=-self.max_x,max=self.max_x)
         instance_points_tensor[:,:,1] = torch.clamp(instance_points_tensor[:,:,1], min=-self.max_y,max=self.max_y)
         return instance_points_tensor
+
+    @property
+    def fixed_dist_padded_points(self):
+        """Returns fixed distance points with padding, valid number of points
+
+        Returns:
+            instance_points_tensor: torch.Tensor([N,num_samples,2]) N the number of instances, num_samples including padding
+            instance_num_pts_tensor: torch.Tensor([N]) valid num_pts per instance
+        """
+        assert len(self.instance_list) != 0
+        assert self.sample_dist > 0
+        assert self.num_samples > 0
+        instance_points_list = []
+        instance_num_pts_list = []
+        for instance in self.instance_list:
+            distances = np.arange(0, instance.length, self.sample_dist)
+            sampled_points = np.array([list(instance.interpolate(distance).coords) for distance in distances]).reshape(-1, 2)
+            num_valid = len(sampled_points)
+            if num_valid < self.num_samples:
+                padding = np.zeros((self.num_samples - len(sampled_points), 2))
+                sampled_points = np.concatenate([sampled_points, padding], axis=0)
+            else:
+                sampled_points = sampled_points[:self.num_samples, :]
+                num_valid = self.num_samples
+            instance_points_list.append(sampled_points)
+            instance_num_pts_list.append(num_valid)
+        
+        instance_points_array = np.array(instance_points_list)
+        instance_points_tensor = to_tensor(instance_points_array)
+        instance_points_tensor = instance_points_tensor.to(
+                            dtype=torch.float32)
+        instance_points_tensor[:,:,0] = torch.clamp(instance_points_tensor[:,:,0], min=-self.max_x,max=self.max_x)
+        instance_points_tensor[:,:,1] = torch.clamp(instance_points_tensor[:,:,1], min=-self.max_y,max=self.max_y)
+        
+        instance_num_pts_array = np.array(instance_num_pts_list)
+        instance_num_pts_tensor = to_tensor(instance_num_pts_array)
+        instance_num_pts_tensor = instance_num_pts_tensor.to(
+                            dtype=torch.int64)
+        return instance_points_tensor, instance_num_pts_tensor
 
     @property
     def fixed_num_sampled_points_ambiguity(self):
@@ -910,8 +949,11 @@ class CustomNuScenesLocalMapDataset(CustomNuScenesDataset):
                  pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
                  overlap_test=False, 
                  fixed_ptsnum_per_line=-1,
+                 sample_dist=1.0,
+                 num_samples=250,
                  eval_use_same_gt_sample_num_flag=False,
                  padding_value=-10000,
+                 padding=True,
                  map_classes=None,
                  noise='None',
                  noise_std=0,
@@ -932,11 +974,14 @@ class CustomNuScenesLocalMapDataset(CustomNuScenesDataset):
         self.patch_size = (patch_h, patch_w)
         self.padding_value = padding_value
         self.fixed_num = fixed_ptsnum_per_line
+        self.sample_dist = sample_dist
+        self.padding = padding
         self.eval_use_same_gt_sample_num_flag = eval_use_same_gt_sample_num_flag
         self.vector_map = VectorizedLocalMap(kwargs['data_root'], 
                             patch_size=self.patch_size, map_classes=self.MAPCLASSES, 
                             fixed_ptsnum_per_line=fixed_ptsnum_per_line,
-                            padding_value=self.padding_value)
+                            padding_value=self.padding_value,
+                            sample_dist=sample_dist, num_samples=num_samples, padding=padding)
         self.is_vis_on_test = False
         self.noise = noise
         self.noise_std = noise_std
@@ -1345,7 +1390,7 @@ class CustomNuScenesLocalMapDataset(CustomNuScenesDataset):
         gt_vectors = []
 
         for gt_instance, gt_label in zip(gt_instances, gt_labels):
-            pts, pts_num = sample_pts_from_line(gt_instance, patch_size=self.patch_size)
+            pts, pts_num = sample_pts_from_line(gt_instance, patch_size=self.patch_size, sample_dist=self.sample_dist, padding=self.padding)
             gt_vectors.append({
                 'pts': pts,
                 'pts_num': pts_num,
@@ -1355,8 +1400,8 @@ class CustomNuScenesLocalMapDataset(CustomNuScenesDataset):
         for i in range(self.NUM_MAPCLASSES):
             vector_num_list[i] = []
         for vec in gt_vectors:
-            if vector['pts_num'] >= 2:
-                vector_num_list[vector['type']].append((LineString(vector['pts'][:vector['pts_num']]), vector.get('confidence_level', 1)))
+            if vec['pts_num'] >= 2:
+                vector_num_list[vec['type']].append((LineString(vec['pts'][:vec['pts_num']]), vec.get('confidence_level', 1)))
         return gt_vectors
 
     def _evaluate_single(self,

@@ -32,7 +32,7 @@ class ConvFuser(nn.Sequential):
 
 
 @TRANSFORMER.register_module()
-class MapTRPerceptionTransformer(BaseModule):
+class InstaGraMPerceptionTransformer(BaseModule):
     """Implements the Detr3D transformer.
     Args:
         as_two_stage (bool): Generate query from encoder features.
@@ -59,7 +59,7 @@ class MapTRPerceptionTransformer(BaseModule):
                  rotate_center=[100, 100],
                  modality='vision',
                  **kwargs):
-        super(MapTRPerceptionTransformer, self).__init__(**kwargs)
+        super(InstaGraMPerceptionTransformer, self).__init__(**kwargs)
         if modality == 'fusion':
             self.fuser = build_fuser(fuser) #TODO
         self.use_attn_bev = encoder['type'] == 'BEVFormerEncoder'
@@ -86,7 +86,7 @@ class MapTRPerceptionTransformer(BaseModule):
             self.num_feature_levels, self.embed_dims))
         self.cams_embeds = nn.Parameter(
             torch.Tensor(self.num_cams, self.embed_dims))
-        self.reference_points = nn.Linear(self.embed_dims, 2) # TODO, this is a hack
+        # self.reference_points = nn.Linear(self.embed_dims, 2) # TODO, this is a hack
         self.can_bus_mlp = nn.Sequential(
             nn.Linear(18, self.embed_dims // 2),
             nn.ReLU(inplace=True),
@@ -110,7 +110,7 @@ class MapTRPerceptionTransformer(BaseModule):
                     m.init_weights()
         normal_(self.level_embeds)
         normal_(self.cams_embeds)
-        xavier_init(self.reference_points, distribution='uniform', bias=0.)
+        # xavier_init(self.reference_points, distribution='uniform', bias=0.)
         xavier_init(self.can_bus_mlp, distribution='uniform', bias=0.)
     # TODO apply fp16 to this module cause grad_norm NAN
     # @auto_fp16(apply_to=('mlvl_feats', 'bev_queries', 'prev_bev', 'bev_pos'), out_fp32=True)
@@ -266,13 +266,10 @@ class MapTRPerceptionTransformer(BaseModule):
                 mlvl_feats,
                 lidar_feat,
                 bev_queries,
-                object_query_embed,
                 bev_h,
                 bev_w,
                 grid_length=[0.512, 0.512],
                 bev_pos=None,
-                reg_branches=None,
-                cls_branches=None,
                 prev_bev=None,
                 **kwargs):
         """Forward function for `Detr3DTransformer`.
@@ -315,7 +312,7 @@ class MapTRPerceptionTransformer(BaseModule):
         bev_embed = self.get_bev_features(
             mlvl_feats,
             lidar_feat,
-            bev_queries,
+            bev_queries, # [bev_h*bev_w, embed_dims] = [20000, 256]
             bev_h,
             bev_w,
             grid_length=grid_length,
@@ -324,30 +321,19 @@ class MapTRPerceptionTransformer(BaseModule):
             **kwargs)  # bev_embed shape: bs, bev_h*bev_w, embed_dims
 
         bs = mlvl_feats[0].size(0)
-        query_pos, query = torch.split(
-            object_query_embed, self.embed_dims, dim=1)
-        query_pos = query_pos.unsqueeze(0).expand(bs, -1, -1)
-        query = query.unsqueeze(0).expand(bs, -1, -1)
-        reference_points = self.reference_points(query_pos)
-        reference_points = reference_points.sigmoid()
-        init_reference_out = reference_points
+        # query_pos, query = torch.split(
+        #     object_query_embed, self.embed_dims, dim=1)
+        # query_pos = query_pos.unsqueeze(0).expand(bs, -1, -1)
+        # query = query.unsqueeze(0).expand(bs, -1, -1)
+        # reference_points = self.reference_points(query_pos)
+        # reference_points = reference_points.sigmoid()
+        # init_reference_out = reference_points
 
-        query = query.permute(1, 0, 2)
-        query_pos = query_pos.permute(1, 0, 2)
-        bev_embed = bev_embed.permute(1, 0, 2) # bev_h*bev_w, bs, embed_dims=256
+        # query = query.permute(1, 0, 2)
+        # query_pos = query_pos.permute(1, 0, 2)
+        # bev_embed = bev_embed.permute(1, 0, 2) # bev_h*bev_w, bs, embed_dims=256
+        bev_embed = bev_embed.reshape(bs, bev_h, bev_w, self.embed_dims).permute(0, 3, 1, 2) # bs, bev_h=200, bev_w=100, embed_dims=256
 
-        inter_states, inter_references = self.decoder(
-            query=query,
-            key=None,
-            value=bev_embed,
-            query_pos=query_pos,
-            reference_points=reference_points,
-            reg_branches=reg_branches,
-            cls_branches=cls_branches,
-            spatial_shapes=torch.tensor([[bev_h, bev_w]], device=query.device),
-            level_start_index=torch.tensor([0], device=query.device),
-            **kwargs)
+        vertex, distance, matches, vertices, masks = self.decoder(bev_embed)
 
-        inter_references_out = inter_references
-
-        return bev_embed, inter_states, init_reference_out, inter_references_out
+        return bev_embed, vertex, distance, matches, vertices, masks
