@@ -354,7 +354,7 @@ class MapTR(MVXTwoStageDetector):
         bbox_results = [
             self.pred2result(bboxes, scores, labels, pts)
             for bboxes, scores, labels, pts in bbox_list
-        ]
+        ] # len: batch size
         # import pdb;pdb.set_trace()
         return outs['bev_embed'], bbox_results
     def simple_test(self, img_metas, img=None, points=None, prev_bev=None, rescale=False, **kwargs):
@@ -364,7 +364,7 @@ class MapTR(MVXTwoStageDetector):
             lidar_feat = self.extract_lidar_feat(points)
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
 
-        bbox_list = [dict() for i in range(len(img_metas))]
+        bbox_list = [dict() for i in range(len(img_metas))] # len: batch size
         new_prev_bev, bbox_pts = self.simple_test_pts(
             img_feats, lidar_feat, img_metas, prev_bev, rescale=rescale)
         for result_dict, pts_bbox in zip(bbox_list, bbox_pts):

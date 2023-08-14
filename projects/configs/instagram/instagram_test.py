@@ -53,6 +53,7 @@ queue_length = 1 # each sequence contains `queue_length` frames.
 
 # InstaGraM
 use_dist_embed = True
+find_unused_parameters = True
 
 model = dict(
     type='InstaGraM',
@@ -78,10 +79,13 @@ model = dict(
         relu_before_extra_convs=True),
     pts_bbox_head=dict(
         type='InstaGraMHead',
+        num_classes=num_map_classes,
         bev_h=bev_h_,
         bev_w=bev_w_,
+        voxel_size=voxel_size,
         as_two_stage=False,
-        code_weights=[1.0, 1.0, 1.0, 1.0],
+        sample_dist=sample_dist,
+        transform_method='minmax',
         transformer=dict(
             type='InstaGraMPerceptionTransformer',
             rotate_prev_bev=True,
@@ -211,46 +215,38 @@ model = dict(
             col_num_embed=bev_w_,
             ),
         loss_vtx=dict(
-            type='BinaryCrossEntropy',
+            type='CrossEntropyLoss',
             use_sigmoid=True,
             class_weight=None,
-            loss_weight=2.0,),
+            loss_weight=1.0,), # 2.0
         loss_dtm=dict(
             type='MSELoss',
-            loss_weight=2.0,),
+            loss_weight=1.0,), # 5.0
         loss_graph=dict(
             type='GraphLoss',
             pc_range=point_cloud_range,
             voxel_size=voxel_size,
             cdist_thr=1.5,
-            reduction='mean',)
-        loss_cls=dict(
-            type='FocalLoss',
-            use_sigmoid=True,
-            gamma=2.0,
-            alpha=0.25,
-            loss_weight=2.0),
-        loss_bbox=dict(type='L1Loss', loss_weight=0.0),
-        loss_iou=dict(type='GIoULoss', loss_weight=0.0),
-        loss_pts=dict(type='PtsL1Loss', 
-                      loss_weight=5.0),
-        loss_dir=dict(type='PtsDirCosLoss', loss_weight=0.005)),
+            reduction='mean',
+            loss_weight=dict(pts=0.5, match=0.001)), # 0.1, 0.005
+    ), # pts_bbox_head
     # model training and testing settings
-    train_cfg=dict(pts=dict(
-        grid_size=[512, 512, 1],
-        voxel_size=voxel_size,
-        point_cloud_range=point_cloud_range,
-        out_size_factor=4,
-        assigner=dict(
-            type='MapTRAssigner',
-            cls_cost=dict(type='FocalLossCost', weight=2.0),
-            reg_cost=dict(type='BBoxL1Cost', weight=0.0, box_format='xywh'),
-            # reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
-            # iou_cost=dict(type='IoUCost', weight=1.0), # Fake cost. This is just to make it compatible with DETR head.
-            iou_cost=dict(type='IoUCost', iou_mode='giou', weight=0.0),
-            pts_cost=dict(type='OrderedPtsL1Cost', 
-                      weight=5),
-            pc_range=point_cloud_range))))
+    # train_cfg=dict(pts=dict(
+    #     grid_size=[512, 512, 1],
+    #     voxel_size=voxel_size,
+    #     point_cloud_range=point_cloud_range,
+    #     out_size_factor=4,
+    #     assigner=dict(
+    #         type='MapTRAssigner',
+    #         cls_cost=dict(type='FocalLossCost', weight=2.0),
+    #         reg_cost=dict(type='BBoxL1Cost', weight=0.0, box_format='xywh'),
+    #         # reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
+    #         # iou_cost=dict(type='IoUCost', weight=1.0), # Fake cost. This is just to make it compatible with DETR head.
+    #         iou_cost=dict(type='IoUCost', iou_mode='giou', weight=0.0),
+    #         pts_cost=dict(type='OrderedPtsL1Cost', 
+    #                   weight=5),
+    #         pc_range=point_cloud_range)))
+    )
 
 dataset_type = 'CustomNuScenesLocalMapDataset'
 data_root = 'data/nuscenes/'
@@ -354,7 +350,7 @@ optimizer = dict(
         }),
     weight_decay=0.01)
 
-optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+optimizer_config = dict(grad_clip=dict(max_norm=5, norm_type=2))
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',
@@ -362,7 +358,7 @@ lr_config = dict(
     warmup_iters=500,
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3)
-total_epochs = 110
+total_epochs = 24
 # total_epochs = 50
 # evaluation = dict(interval=1, pipeline=test_pipeline)
 evaluation = dict(interval=2, pipeline=test_pipeline, metric='chamfer')
@@ -376,4 +372,4 @@ log_config = dict(
         dict(type='TensorboardLoggerHook')
     ])
 fp16 = dict(loss_scale=512.)
-checkpoint_config = dict(interval=5)
+checkpoint_config = dict(interval=2) # interval=5

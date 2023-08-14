@@ -167,8 +167,8 @@ class InstaGraMDecoder(BaseModule):
         
         scores = vertex.sigmoid()
         b_org, c_org, _, _ = scores.shape
-        scores = rearrange(scores, 'b c ... -> (b c) ...') # (b c) 25 50
-        score_shape = scores.shape # (b c) 25 50
+        scores = rearrange(scores, 'b c ... -> (b c) ...') # (b c) 50 25
+        score_shape = scores.shape # (b c) 50 25
         
         # [2] Extract vertices using NMS
         vertices = [torch.nonzero(s > self.vertex_thr) for s in scores] # list of length (b c), [N, 2(row, col)] tensor
@@ -207,7 +207,7 @@ class InstaGraMDecoder(BaseModule):
             ] # (b c) list of [N, 2] tensor
 
         # Vertices in pixel coordinate
-        vertices = torch.stack(vertices).flip([2]) # (b c) N 2; x: [0~49], y: [0~24]
+        vertices = torch.stack(vertices).flip([2]) # (b c) N 2; x: [0~24], y: [0~49]
 
         # Positional embedding (x, y, c)
         pos_embedding = [

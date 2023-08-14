@@ -15,6 +15,7 @@ from mmcv.utils import TORCH_VERSION, digit_version
 from mmdet.datasets.pipelines import to_tensor
 
 from projects.mmdet3d_plugin.datasets.map_utils.rasterize import preprocess_map
+from projects.mmdet3d_plugin.instagram.modules.graph import vectorize_graph
 
 def normalize_2d_bbox(bboxes, pc_range):
 
@@ -48,11 +49,21 @@ def denormalize_2d_bbox(bboxes, pc_range):
 
     return bboxes
 def denormalize_2d_pts(pts, pc_range):
-    new_pts = pts.clone()
-    new_pts[...,0:1] = (pts[..., 0:1]*(pc_range[3] -
-                            pc_range[0]) + pc_range[0])
-    new_pts[...,1:2] = (pts[...,1:2]*(pc_range[4] -
-                            pc_range[1]) + pc_range[1])
+    """Denormalize point coordinates
+
+    Args:
+        pts (list[torch.Tensor]): [num_vec] list of shape [num_pts, 2]
+        pc_range (_type_): _description_
+
+    Returns:
+        list[torch.Tensor]: denormalized pts (with same shape)
+    """
+    new_pts = [pt.clone() for pt in pts]
+    for i, pt in enumerate(pts):
+        new_pts[i][...,0:1] = (pt[..., 0:1]*(pc_range[3] -
+                            pc_range[0]) + pc_range[0]) # pt*30 - 15
+        new_pts[i][...,1:2] = (pt[...,1:2]*(pc_range[4] -
+                            pc_range[1]) + pc_range[1]) # pt*60 - 30
     return new_pts
 @HEADS.register_module()
 class InstaGraMHead(BaseModule):
@@ -68,47 +79,57 @@ class InstaGraMHead(BaseModule):
     """
 
     def __init__(self,
-                 *args,
+                 num_classes,
                  as_two_stage=False,
                  transformer=None,
-                 code_weights=None,
+                 sample_dist=1.5,
                  bev_h=30,
                  bev_w=30,
+                 voxel_size=[0.15, 0.15, 4],
                  positional_encoding=None,
-                 **kwargs):
+                 transform_method='minmax',
+                 loss_vtx=dict(
+                     type='BinaryCrossEntropy',
+                     use_sigmoid=True,
+                     class_weight=None,
+                     loss_weight=2.0,),
+                 loss_dtm=dict(
+                     type='MSELoss',
+                     loss_weight=2.0,),
+                 loss_graph=None,
+                 **kwargs
+                 ):
         super(InstaGraMHead, self).__init__()
 
+        self.num_classes = num_classes
+        self.sample_dist = sample_dist
         self.bev_h = bev_h
         self.bev_w = bev_w
+        self.voxel_size = voxel_size
+        self.transform_method = transform_method
         self.fp16_enabled = False
 
         self.as_two_stage = as_two_stage
         self.bev_encoder_type = transformer.encoder.type
         if self.as_two_stage:
             transformer['as_two_stage'] = self.as_two_stage
-        if 'code_size' in kwargs:
-            self.code_size = kwargs['code_size']
-        else:
-            self.code_size = 10
-        if code_weights is not None:
-            self.code_weights = code_weights
-        else:
-            self.code_weights = [1.0, 1.0, 1.0,
-                                 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+        
+        self.loss_vtx = build_loss(loss_vtx)
+        self.loss_dtm = build_loss(loss_dtm)
+        self.loss_graph = build_loss(loss_graph)
+        
+        self.positional_encoding = build_positional_encoding(
+            positional_encoding)
+        self.transformer = build_transformer(transformer)
+        self.embed_dims = self.transformer.embed_dims
 
-        self.pc_range = self.bbox_coder.pc_range # [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
+        self.pc_range = self.transformer.encoder.pc_range # [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
         self.real_w = self.pc_range[3] - self.pc_range[0]
         self.real_h = self.pc_range[4] - self.pc_range[1]
         
         # InstaGraM
         self.dist_thr = transformer.decoder.dist_thr
         
-        self.positional_encoding = build_positional_encoding(
-            positional_encoding)
-        self.transformer = build_transformer(transformer)
-        
-        self.code_weights = nn.Parameter(torch.tensor(
-            self.code_weights, requires_grad=False), requires_grad=False)
         self._init_layers()
 
     def _init_layers(self):
@@ -190,41 +211,42 @@ class InstaGraMHead(BaseModule):
             'bev_embed': bev_embed,
             'bev_pts_scores': vertex,
             'bev_embed_preds': distance,
-            'all_pts_preds': vertices,
-            'all_adj_preds': matches,
-            'all_pts_masks': masks,
+            'pts_preds': vertices,
+            'adj_preds': matches,
+            'pts_masks': masks,
         }
 
         return outs
     def transform_box(self, pts, y_first=False):
         """
-        Converting the points set into bounding box.
+        Converting the points set into bounding box. Single batch input only
 
         Args:
-            pts: the input points sets (fields), each points
+            pts (list[Tensor]): the input points sets (fields), each points
                 set (fields) is represented as 2n scalar.
+                Has length num_vec of tensor shape [num_pts, 2]
             y_first: if y_fisrt=True, the point set is represented as
                 [y1, x1, y2, x2 ... yn, xn], otherwise the point set is
                 represented as [x1, y1, x2, y2 ... xn, yn].
         Returns:
-            The bbox [cx, cy, w, h] transformed from points.
+            (list[Tensor]): The bbox [cx, cy, w, h] transformed from points.
+                Has length num_vec of tensor [4]
         """
-        pts_reshape = pts.view(pts.shape[0], self.num_vec,
-                                self.num_pts_per_vec,2)
-        pts_y = pts_reshape[:, :, :, 0] if y_first else pts_reshape[:, :, :, 1]
-        pts_x = pts_reshape[:, :, :, 1] if y_first else pts_reshape[:, :, :, 0]
+        # [num_vec] list of [num_pts] tensor
+        pts_y = [pt[:, 0] if y_first else pt[:, 1] for pt in pts]
+        pts_x = [pt[:, 1] if y_first else pt[:, 0] for pt in pts]
         if self.transform_method == 'minmax':
             # import pdb;pdb.set_trace()
-
-            xmin = pts_x.min(dim=2, keepdim=True)[0]
-            xmax = pts_x.max(dim=2, keepdim=True)[0]
-            ymin = pts_y.min(dim=2, keepdim=True)[0]
-            ymax = pts_y.max(dim=2, keepdim=True)[0]
-            bbox = torch.cat([xmin, ymin, xmax, ymax], dim=2)
+            # tensor [num_vec, 1]
+            xmin = torch.stack([pt_x.min(dim=-1, keepdim=True)[0] for pt_x in pts_x])
+            xmax = torch.stack([pt_x.max(dim=-1, keepdim=True)[0] for pt_x in pts_x])
+            ymin = torch.stack([pt_y.min(dim=-1, keepdim=True)[0] for pt_y in pts_y])
+            ymax = torch.stack([pt_y.max(dim=-1, keepdim=True)[0] for pt_y in pts_y])
+            bbox = torch.cat([xmin, ymin, xmax, ymax], dim=-1) # [num_vec, 4]
             bbox = bbox_xyxy_to_cxcywh(bbox)
         else:
             raise NotImplementedError
-        return bbox, pts_reshape
+        return bbox
     def _get_target_single(self,
                            cls_score,
                            bbox_pred,
@@ -369,9 +391,9 @@ class InstaGraMHead(BaseModule):
                     pts_preds,
                     adj_preds,
                     pts_masks,
-                    gt_labels_list,
-                    gt_pts_list,
-                    gt_num_pts_list):
+                    gt_vectors_list,
+                    gt_vtm,
+                    gt_dtm):
         """"Loss function for outputs from a single decoder layer of a single
         feature level.
         Args:
@@ -386,112 +408,26 @@ class InstaGraMHead(BaseModule):
                 score.
             pts_masks (Tensor): Mask for valid vertices as float
                 (0.0 or 1.0), has shape (bs, num_classes, N, 1).
-            gt_labels_list (list[Tensor]): Ground truth class indices for each
-                image with shape (bs, num_gts, ).
-            gt_pts_list (list[Tensor]): Ground truth pts for each image
-                with shape (bs, num_gts, fixed_num, 2) in [x,y] format.
-            gt_num_pts_list (list[Tensor]): Number of valid points for each
-                instance with shape (bs, num_gts) in int
+            gt_vectors_list (list[list[dict]]): Ground truth vectors
+                (bs) length list of (num_gt) list of dict('pts', 'pts_num', 'type').
+            gt_vtm (Tensor): List of vertex score map
+                has shape (bs, num_classes, cs*cs, h//8, w//8).
+            gt_dtm (Tensor): Mask for valid vertices as float
+                has shape (bs, num_classes, h, w).
         Returns:
             dict[str, Tensor]: A dictionary of loss components for outputs from
                 a single decoder layer.
         """
-        num_imgs = cls_scores.size(0)
-        cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
-        bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
-        pts_preds_list = [pts_preds[i] for i in range(num_imgs)]
-        # import pdb;pdb.set_trace()
-        cls_reg_targets = self.get_targets(cls_scores_list, bbox_preds_list,pts_preds_list,
-                                           gt_bboxes_list, gt_labels_list,gt_shifts_pts_list,
-                                           gt_bboxes_ignore_list)
-        (labels_list, label_weights_list, bbox_targets_list, bbox_weights_list,
-         pts_targets_list, pts_weights_list,
-         num_total_pos, num_total_neg) = cls_reg_targets
-        # import pdb;pdb.set_trace()
-        labels = torch.cat(labels_list, 0)
-        label_weights = torch.cat(label_weights_list, 0)
-        bbox_targets = torch.cat(bbox_targets_list, 0)
-        bbox_weights = torch.cat(bbox_weights_list, 0)
-        pts_targets = torch.cat(pts_targets_list, 0)
-        pts_weights = torch.cat(pts_weights_list, 0)
-
-        # classification loss
-        cls_scores = cls_scores.reshape(-1, self.cls_out_channels)
-        # construct weighted avg_factor to match with the official DETR repo
-        cls_avg_factor = num_total_pos * 1.0 + \
-            num_total_neg * self.bg_cls_weight
-        if self.sync_cls_avg_factor:
-            cls_avg_factor = reduce_mean(
-                cls_scores.new_tensor([cls_avg_factor]))
-
-        cls_avg_factor = max(cls_avg_factor, 1)
-        loss_cls = self.loss_cls(
-            cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
-
-        # Compute the average number of gt boxes accross all gpus, for
-        # normalization purposes
-        num_total_pos = loss_cls.new_tensor([num_total_pos])
-        num_total_pos = torch.clamp(reduce_mean(num_total_pos), min=1).item()
-
-        # import pdb;pdb.set_trace()
-        # regression L1 loss
-        bbox_preds = bbox_preds.reshape(-1, bbox_preds.size(-1))
-        normalized_bbox_targets = normalize_2d_bbox(bbox_targets, self.pc_range)
-        # normalized_bbox_targets = bbox_targets
-        isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
-        bbox_weights = bbox_weights * self.code_weights
-
-        loss_bbox = self.loss_bbox(
-            bbox_preds[isnotnan, :4], normalized_bbox_targets[isnotnan,
-                                                               :4], bbox_weights[isnotnan, :4],
-            avg_factor=num_total_pos)
-
-        # regression pts CD loss
-        # pts_preds = pts_preds
-        # import pdb;pdb.set_trace()
-        
-        # num_samples, num_order, num_pts, num_coords
-        normalized_pts_targets = normalize_2d_pts(pts_targets, self.pc_range)
-
-        # num_samples, num_pts, num_coords
-        pts_preds = pts_preds.reshape(-1, pts_preds.size(-2),pts_preds.size(-1))
-        if self.num_pts_per_vec != self.num_pts_per_gt_vec:
-            pts_preds = pts_preds.permute(0,2,1)
-            pts_preds = F.interpolate(pts_preds, size=(self.num_pts_per_gt_vec), mode='linear',
-                                    align_corners=True)
-            pts_preds = pts_preds.permute(0,2,1).contiguous()
-
-        # import pdb;pdb.set_trace()
-        loss_pts = self.loss_pts(
-            pts_preds[isnotnan,:,:], normalized_pts_targets[isnotnan,
-                                                            :,:], 
-            pts_weights[isnotnan,:,:],
-            avg_factor=num_total_pos)
-        dir_weights = pts_weights[:, :-self.dir_interval,0]
-        denormed_pts_preds = denormalize_2d_pts(pts_preds, self.pc_range)
-        denormed_pts_preds_dir = denormed_pts_preds[:,self.dir_interval:,:] - denormed_pts_preds[:,:-self.dir_interval,:]
-        pts_targets_dir = pts_targets[:, self.dir_interval:,:] - pts_targets[:,:-self.dir_interval,:]
-        # dir_weights = pts_weights[:, indice,:-1,0]
-        # import pdb;pdb.set_trace()
-        loss_dir = self.loss_dir(
-            denormed_pts_preds_dir[isnotnan,:,:], pts_targets_dir[isnotnan,
-                                                                          :,:],
-            dir_weights[isnotnan,:],
-            avg_factor=num_total_pos)
-
-        bboxes = denormalize_2d_bbox(bbox_preds, self.pc_range)
-        # regression IoU loss, defaultly GIoU loss
-        loss_iou = self.loss_iou(
-            bboxes[isnotnan, :4], bbox_targets[isnotnan, :4], bbox_weights[isnotnan, :4], 
-            avg_factor=num_total_pos)
+        loss_vtx = self.loss_vtx(bev_pts_scores, gt_vtm.max(2)[0])
+        loss_dtm = self.loss_dtm(bev_embed_preds.sigmoid(), gt_dtm)
+        loss_pts, loss_match, gt_adj_mat = self.loss_graph(adj_preds, pts_preds, pts_masks, gt_vectors_list)
 
         if digit_version(TORCH_VERSION) >= digit_version('1.8'):
-            loss_cls = torch.nan_to_num(loss_cls)
-            loss_bbox = torch.nan_to_num(loss_bbox)
-            loss_iou = torch.nan_to_num(loss_iou)
+            loss_vtx = torch.nan_to_num(loss_vtx)
+            loss_dtm = torch.nan_to_num(loss_dtm)
             loss_pts = torch.nan_to_num(loss_pts)
-            loss_dir = torch.nan_to_num(loss_dir)
-        return loss_cls, loss_bbox, loss_iou, loss_pts, loss_dir
+            loss_match = torch.nan_to_num(loss_match)
+        return loss_vtx, loss_dtm, loss_pts, loss_match, gt_adj_mat
 
     @force_fp32(apply_to=('preds_dicts'))
     def loss(self,
@@ -512,12 +448,12 @@ class InstaGraMHead(BaseModule):
                     has shape [bs, num_classes, h//8, w//8].
                 bev_embed_preds (Tensor): Distance transform map in BEV                    
                     has shape [bs, num_classes, h, w].
-                all_pts_preds (Tensor): Vertex coordinates in BEV, normalized
+                pts_preds (Tensor): Vertex coordinates in BEV, normalized
                     format (x, y, score), has shape (bs, num_classes, N, 3).
-                all_adj_preds (Tensor): Adjacency score matrix of vertices, 
+                adj_preds (Tensor): Adjacency score matrix of vertices, 
                     has shape (bs, num_classes, N+1, N+1). N+1 includes dustbin
                     score.
-                all_pts_masks (Tensor): Mask for valid vertices as float
+                pts_masks (Tensor): Mask for valid vertices as float
                     (0.0 or 1.0), has shape (bs, num_classes, N, 1).
             gt_bboxes_ignore (list[Tensor], optional): Bounding boxes
                 which can be ignored for each image. Default None.
@@ -530,36 +466,32 @@ class InstaGraMHead(BaseModule):
         gt_vecs_list = copy.deepcopy(gt_bboxes_list)
         
         # import pdb;pdb.set_trace()
-        bev_pts_scores = preds_dicts['bev_pts_scores']
-        bev_embed_preds = preds_dicts['bev_embed_preds']
-        pts_preds  = preds_dicts['all_pts_preds']
-        adj_preds = preds_dicts['all_adj_preds']
-        pts_masks = preds_dicts['all_pts_masks']
+        bev_pts_scores = preds_dicts['bev_pts_scores'] # (bs, 3, h//8, w//8)
+        bev_embed_preds = preds_dicts['bev_embed_preds'] # (bs, 3, h, w)
+        pts_preds  = preds_dicts['pts_preds'] # (bs, 3, N, 3)
+        adj_preds = preds_dicts['adj_preds'] # (bs, 3, N+1, N+1)
+        pts_masks = preds_dicts['pts_masks'] # (bs, 3, N, 1)
 
         device = gt_labels_list[0].device
         
-        vertex_masks_list = []
-        distance_transform_masks_list = []
+        gt_vectors_list = []
+        gt_vtm_list = []
+        gt_dtm_list = []
         for gt_vecs, gt_labels in zip(gt_vecs_list, gt_labels_list):
-            mask_dict = preprocess_map(dict(gt_labels_3d=gt_labels, gt_bboxes_3d=gt_vecs),
+            prep_dict = preprocess_map(dict(gt_labels_3d=gt_labels, gt_bboxes_3d=gt_vecs),
                                        self.pc_range,
-                                       voxel_size=self.bbox_coder.voxel_size,
+                                       voxel_size=self.voxel_size,
                                        num_classes=self.num_classes,
                                        dt_threshold=self.dist_thr)
-            vertex_masks_list.append(to_tensor(mask_dict['vertex_mask']).to(device))
-            distance_transform_masks_list.append(to_tensor(mask_dict['distance_transform']).to(device))
+            gt_vectors_list.append(prep_dict['gt_vectors'])
+            gt_vtm_list.append(to_tensor(prep_dict['vertex_mask']).to(device))
+            gt_dtm_list.append(to_tensor(prep_dict['distance_transform']).to(device))
+        gt_vtm = torch.stack(gt_vtm_list).to(device)
+        gt_dtm = torch.stack(gt_dtm_list).to(device)
 
-        gt_bboxes_list = [
-            gt_bboxes.bbox.to(device) for gt_bboxes in gt_vecs_list]
-        gt_pts_list = [
-            gt_bboxes.fixed_dist_padded_points.to(device) for gt_bboxes in gt_vecs_list]
-        gt_pts_list, gt_num_pts_list = list(zip(*[
-            [gt_pts.to(device) for gt_pts in gt_bboxes.fixed_dist_padded_points] for gt_bboxes in gt_vecs_list
-        ]))
-        losses_cls, losses_bbox, losses_iou, losses_pts, losses_dir = self.loss_single(
-            bev_pts_scores, bev_embed_preds, all_pts_preds,
-            all_adj_preds, all_pts_masks, gt_labels_list, gt_pts_list,
-            gt_num_pts_list)
+        loss_vtx, loss_dtm, loss_pts, loss_match, gt_adj_mat = self.loss_single(
+            bev_pts_scores, bev_embed_preds, pts_preds,
+            adj_preds, pts_masks, gt_vectors_list, gt_vtm, gt_dtm)
 
         loss_dict = dict()
         # loss of proposal generated from encode feature map.
@@ -579,51 +511,51 @@ class InstaGraMHead(BaseModule):
         #     loss_dict['enc_losses_dir'] = enc_losses_dir
 
         # loss from the last decoder layer
-        loss_dict['loss_cls'] = losses_cls[-1]
-        loss_dict['loss_bbox'] = losses_bbox[-1]
-        loss_dict['loss_iou'] = losses_iou[-1]
-        loss_dict['loss_pts'] = losses_pts[-1]
-        loss_dict['loss_dir'] = losses_dir[-1]
+        loss_dict['loss_vtx'] = loss_vtx
+        loss_dict['loss_dtm'] = loss_dtm
+        loss_dict['loss_pts'] = loss_pts
+        loss_dict['loss_match'] = loss_match
+        # loss_dict['gt_adj_mat'] = gt_adj_mat
         # loss from other decoder layers
-        num_dec_layer = 0
-        for loss_cls_i, loss_bbox_i, loss_iou_i, loss_pts_i, loss_dir_i in zip(losses_cls[:-1],
-                                           losses_bbox[:-1],
-                                           losses_iou[:-1],
-                                           losses_pts[:-1],
-                                           losses_dir[:-1]):
-            loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
-            loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
-            loss_dict[f'd{num_dec_layer}.loss_iou'] = loss_iou_i
-            loss_dict[f'd{num_dec_layer}.loss_pts'] = loss_pts_i
-            loss_dict[f'd{num_dec_layer}.loss_dir'] = loss_dir_i
-            num_dec_layer += 1
         return loss_dict
 
     @force_fp32(apply_to=('preds_dicts'))
     def get_bboxes(self, preds_dicts, img_metas, rescale=False):
         """Generate bboxes from bbox head predictions.
         Args:
-            preds_dicts (tuple[list[dict]]): Prediction results.
+            preds_dicts:
+                bev_pts_scores (Tensor): Vertex classification score in BEV, 
+                    has shape [bs, num_classes, h//8, w//8].
+                bev_embed_preds (Tensor): Distance transform map in BEV                    
+                    has shape [bs, num_classes, h, w].
+                pts_preds (Tensor): Vertex coordinates in BEV, normalized
+                    format (x, y, score), has shape (bs, num_classes, N, 3).
+                adj_preds (Tensor): Adjacency score matrix of vertices, 
+                    has shape (bs, num_classes, N+1, N+1). N+1 includes dustbin
+                    score.
+                pts_masks (Tensor): Mask for valid vertices as float
+                    (0.0 or 1.0), has shape (bs, num_classes, N, 1).
             img_metas (list[dict]): Point cloud and image's meta info.
         Returns:
             list[dict]: Decoded bbox, scores and labels after nms.
         """
         # bboxes: xmin, ymin, xmax, ymax
-        preds_dicts = self.bbox_coder.decode(preds_dicts)
-
-        num_samples = len(preds_dicts)
         ret_list = []
+        num_samples = preds_dicts['pts_preds'].shape[0]
         for i in range(num_samples):
-            preds = preds_dicts[i]
-            bboxes = preds['bboxes']
-            # bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
-
-            # code_size = bboxes.shape[-1]
-            # bboxes = img_metas[i]['box_type_3d'](bboxes, code_size)
-            scores = preds['scores']
-            labels = preds['labels']
-            pts = preds['pts']
-
+            # pts: [num_vec] list of tensor [num_pts, 2]
+            # scores: tensor [num_vec]
+            # labels: tensor [num_vec]
+            pts, scores, labels = vectorize_graph(preds_dicts['pts_preds'][i], 
+                                                  preds_dicts['adj_preds'][i],
+                                                  preds_dicts['pts_masks'][i])
+            if len(pts) == 0:
+                bboxes = scores.new_tensor([])
+            else:
+                bboxes = self.transform_box(pts) # tensor [num_vec, 4] cx cy w h            
+                pts = denormalize_2d_pts(pts, self.pc_range)
+                bboxes = denormalize_2d_bbox(bboxes, self.pc_range)
+            
             ret_list.append([bboxes, scores, labels, pts])
 
         return ret_list

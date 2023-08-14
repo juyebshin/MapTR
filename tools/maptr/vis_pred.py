@@ -337,47 +337,7 @@ def main():
 
                 gt_polyline_map_path = osp.join(sample_dir, 'GT_polyline_pts_MAP.png')
                 plt.savefig(gt_polyline_map_path, bbox_inches='tight', format='png',dpi=1200)
-                plt.close()           
-            elif vis_format == 'fixed_dist_pts':
-                plt.figure(figsize=(2, 4))
-                plt.xlim(pc_range[0], pc_range[3]) # -15, 15
-                plt.ylim(pc_range[1], pc_range[4]) # -30, 30
-                plt.axis('off')
-                gt_lines_fixed_dist_pts, gt_lines_num_pts = gt_bboxes_3d[0].fixed_dist_padded_points
-                for gt_line_fixed_dist_pts, gt_line_num_pts, gt_label_3d in zip(gt_lines_fixed_dist_pts, gt_lines_num_pts, gt_labels_3d[0]):
-                    pts = gt_line_fixed_dist_pts[:gt_line_num_pts].numpy()
-                    x = np.array([pt[0] for pt in pts])
-                    y = np.array([pt[1] for pt in pts])
-                    
-                    plt.plot(x, y, color=colors_plt[gt_label_3d],linewidth=1,alpha=0.8,zorder=-1) # linewidth=1
-                    plt.scatter(x, y, color=colors_plt[gt_label_3d],s=2,alpha=0.8,zorder=-1)
-                plt.imshow(car_img, extent=[-1.2, 1.2, -1.5, 1.5])
-
-                gt_polyline_map_path = osp.join(sample_dir, 'GT_fixeddist_pts_MAP.png')
-                plt.savefig(gt_polyline_map_path, bbox_inches='tight', format='png',dpi=1200)
-                plt.close()           
-                
-                mask_dict = preprocess_map(dict(gt_labels_3d=gt_labels_3d[0], gt_bboxes_3d=gt_bboxes_3d[0]),
-                                           pc_range,
-                                           cfg.voxel_size,
-                                           cfg.num_map_classes,
-                                           cfg.sample_dist,
-                                           dt_threshold=10)
-                dt = mask_dict['distance_transform']
-                # vmin = np.min(dt)
-                # vmax = np.max(dt)
-                # dt = (dt - vmin) / (vmax-vmin)
-                dt_color_mask = cmap(dt.max(0))[..., :3] * 255 # 400, 200, 3
-                Image.fromarray(dt_color_mask.astype('uint8')).save(osp.join(sample_dir, 'GT_distance_transform_MAP.png'))
-                
-                vt = mask_dict['vertex_mask'] * 255 # 3, 64, 50, 25
-                C, _, Hc, Wc = vt.shape
-                vt = vt.transpose(0, 2, 3, 1) # 3, 50, 25, 64
-                vt = np.reshape(vt, [C, Hc, Wc, 8, 8]) # 3, 50, 25, 8, 8
-                vt = np.transpose(vt, [0, 1, 3, 2, 4]) # 3, 50, 8, 25, 8
-                vt = np.reshape(vt, [C, Hc*8, Wc*8]) # 3, 400, 200
-                vt_color_mask = cmap(vt.max(0))[..., :3] * 255 # 400, 200, 3
-                Image.fromarray(vt_color_mask.astype('uint8')).save(osp.join(sample_dir, 'GT_vertex_mask_MAP.png'))
+                plt.close()      
 
             else: 
                 logger.error(f'WRONG visformat for GT: {vis_format}')

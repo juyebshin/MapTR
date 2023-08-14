@@ -28,7 +28,7 @@ def sample_pts_from_line(line,
                          padding=False,
                          num_samples=250,):
     if fixed_num < 0:
-        distances = np.arange(0, line.length, sample_dist)
+        distances = np.arange(0, line.length+sample_dist, sample_dist) # line.length+sample_dist: includes endpoint
         sampled_points = np.array([list(line.interpolate(distance).coords) for distance in distances]).reshape(-1, 2)
     else:
         # fixed number of points, so distance is line.length / fixed_num
@@ -128,7 +128,7 @@ def line_geom_to_mask(layer_geom, confidence_levels, local_box, canvas_size, thi
             new_line = affinity.scale(new_line, xfact=scale_width, yfact=scale_height, origin=(0, 0))
             # new_line: vectors in BEV pixel coordinate
             confidence_levels.append(confidence)
-            if new_line.geom_type == 'MultiLineString':
+            if new_line.geom_type == 'MultiLineString' or new_line.geom_type == 'GeometryCollection':
                 for new_single_line in new_line.geoms:
                     map_mask, idx = mask_for_lines(new_single_line, map_mask, thickness, idx, type, angle_class)
             else:
@@ -225,6 +225,7 @@ def preprocess_map(gt_dict, # dict('gt_labels_3d'=torch.tensor, 'gt_bboxes_3d'=L
     distance_masks = distance_masks != 0
     
     outs = {
+        'gt_vectors': gt_vectors,
         'distance_transform': get_distance_transform(distance_masks, dt_threshold),
         'vertex_mask': vertex_masks
     }

@@ -74,8 +74,8 @@ def perspective(cam_coords, proj_mat):
 def parse_args():
     parser = argparse.ArgumentParser(description='vis hdmaptr map gt label')
     parser.add_argument('config', help='test config file path')
-    # parser.add_argument('checkpoint', help='checkpoint file')
-    parser.add_argument('--score-thresh', default=0.4, type=float, help='samples to visualize')
+    parser.add_argument('checkpoint', help='checkpoint file')
+    parser.add_argument('--score-thresh', default=0.1, type=float, help='samples to visualize')
     parser.add_argument(
         '--show-dir', help='directory where visualizations will be saved')
     parser.add_argument('--show-cam', action='store_true', help='show camera pic')
@@ -143,7 +143,7 @@ def main():
     if args.show_dir is None:
         args.show_dir = osp.join('./work_dirs', 
                                 osp.splitext(osp.basename(args.config))[0],
-                                'vis_label')
+                                'vis_pred')
     # create vis_label dir
     mmcv.mkdir_or_exist(osp.abspath(args.show_dir))
     cfg.dump(osp.join(args.show_dir, osp.basename(args.config)))
@@ -166,27 +166,27 @@ def main():
 
     # build the model and load checkpoint
     # import pdb;pdb.set_trace()
-    # cfg.model.train_cfg = None
-    # # cfg.model.pts_bbox_head.bbox_coder.max_num=15 # TODO this is a hack
-    # model = build_model(cfg.model, test_cfg=cfg.get('test_cfg'))
-    # fp16_cfg = cfg.get('fp16', None)
-    # if fp16_cfg is not None:
-    #     wrap_fp16_model(model)
-    # logger.info('loading check point')
-    # checkpoint = load_checkpoint(model, args.checkpoint, map_location='cpu')
-    # if 'CLASSES' in checkpoint.get('meta', {}):
-    #     model.CLASSES = checkpoint['meta']['CLASSES']
-    # else:
-    #     model.CLASSES = dataset.CLASSES
-    # # palette for visualization in segmentation tasks
-    # if 'PALETTE' in checkpoint.get('meta', {}):
-    #     model.PALETTE = checkpoint['meta']['PALETTE']
-    # elif hasattr(dataset, 'PALETTE'):
-    #     # segmentation dataset has `PALETTE` attribute
-    #     model.PALETTE = dataset.PALETTE
-    # logger.info('DONE load check point')
-    # model = MMDataParallel(model, device_ids=[0])
-    # model.eval()
+    cfg.model.train_cfg = None
+    # cfg.model.pts_bbox_head.bbox_coder.max_num=15 # TODO this is a hack
+    model = build_model(cfg.model, test_cfg=cfg.get('test_cfg'))
+    fp16_cfg = cfg.get('fp16', None)
+    if fp16_cfg is not None:
+        wrap_fp16_model(model)
+    logger.info('loading check point')
+    checkpoint = load_checkpoint(model, args.checkpoint, map_location='cpu')
+    if 'CLASSES' in checkpoint.get('meta', {}):
+        model.CLASSES = checkpoint['meta']['CLASSES']
+    else:
+        model.CLASSES = dataset.CLASSES
+    # palette for visualization in segmentation tasks
+    if 'PALETTE' in checkpoint.get('meta', {}):
+        model.PALETTE = checkpoint['meta']['PALETTE']
+    elif hasattr(dataset, 'PALETTE'):
+        # segmentation dataset has `PALETTE` attribute
+        model.PALETTE = dataset.PALETTE
+    logger.info('DONE load check point')
+    model = MMDataParallel(model, device_ids=[0])
+    model.eval()
 
     img_norm_cfg = cfg.img_norm_cfg
 
@@ -202,7 +202,7 @@ def main():
     car_img = Image.open('./figs/lidar_car.png')
 
     # get color map: divider->r, ped->b, boundary->g
-    colors_plt = ['orange', 'b', 'g']
+    colors_plt = ['tab:red', 'tab:blue', 'tab:green'] # 'orange', 'b', 'g'
 
 
     logger.info('BEGIN vis test dataset samples gt label & pred')
@@ -236,8 +236,8 @@ def main():
         # if pts_filename not in CANDIDATE:
         #     continue
 
-        # with torch.no_grad():
-        #     result = model(return_loss=False, rescale=True, **data)
+        with torch.no_grad():
+            result = model(return_loss=False, rescale=True, **data)
         sample_dir = osp.join(args.show_dir, pts_filename)
         mmcv.mkdir_or_exist(osp.abspath(sample_dir))
 
@@ -363,7 +363,7 @@ def main():
 
                 gt_fixeddist_map_path = osp.join(sample_dir, 'GT_fixeddist_pts_MAP.png')
                 plt.savefig(gt_fixeddist_map_path, bbox_inches='tight', format='png',dpi=1200)
-                plt.close()    
+                plt.close()           
                 dt = map_dict['distance_transform']
                 # vmin = np.min(dt)
                 # vmax = np.max(dt)
@@ -386,44 +386,47 @@ def main():
 
         # visualize pred
         # import pdb;pdb.set_trace()
-        # result_dic = result[0]['pts_bbox']
-        # boxes_3d = result_dic['boxes_3d'] # bbox: xmin, ymin, xmax, ymax
-        # scores_3d = result_dic['scores_3d']
-        # labels_3d = result_dic['labels_3d']
-        # pts_3d = result_dic['pts_3d']
-        # keep = scores_3d > args.score_thresh
+        result_dic = result[0]['pts_bbox']
+        boxes_3d = result_dic['boxes_3d'] # bbox: xmin, ymin, xmax, ymax
+        scores_3d = result_dic['scores_3d']
+        labels_3d = result_dic['labels_3d']
+        pts_3d = result_dic['pts_3d']
+        keep = scores_3d > args.score_thresh
 
-        # plt.figure(figsize=(2, 4))
-        # plt.xlim(pc_range[0], pc_range[3])
-        # plt.ylim(pc_range[1], pc_range[4])
-        # plt.axis('off')
-        # for pred_score_3d, pred_bbox_3d, pred_label_3d, pred_pts_3d in zip(scores_3d[keep], boxes_3d[keep],labels_3d[keep], pts_3d[keep]):
+        plt.figure(figsize=(2, 4))
+        plt.xlim(pc_range[0], pc_range[3])
+        plt.ylim(pc_range[1], pc_range[4])
+        plt.axis('off')
+        for pred_score_3d, pred_bbox_3d, pred_label_3d, pred_pts_3d in zip(scores_3d, boxes_3d,labels_3d, pts_3d):
 
-        #     pred_pts_3d = pred_pts_3d.numpy()
-        #     pts_x = pred_pts_3d[:,0]
-        #     pts_y = pred_pts_3d[:,1]
-        #     plt.plot(pts_x, pts_y, color=colors_plt[pred_label_3d],linewidth=1,alpha=0.8,zorder=-1)
-        #     plt.scatter(pts_x, pts_y, color=colors_plt[pred_label_3d],s=1,alpha=0.8,zorder=-1)
-
-
-        #     pred_bbox_3d = pred_bbox_3d.numpy()
-        #     xy = (pred_bbox_3d[0],pred_bbox_3d[1])
-        #     width = pred_bbox_3d[2] - pred_bbox_3d[0]
-        #     height = pred_bbox_3d[3] - pred_bbox_3d[1]
-        #     pred_score_3d = float(pred_score_3d)
-        #     pred_score_3d = round(pred_score_3d, 2)
-        #     s = str(pred_score_3d)
+            pred_pts_3d = pred_pts_3d.numpy()
+            pts_x = pred_pts_3d[:,0]
+            pts_y = pred_pts_3d[:,1]
+            plt.plot(pts_x, pts_y, color=colors_plt[pred_label_3d],linewidth=1,alpha=0.8,zorder=-1)
+            plt.scatter(pts_x, pts_y, color=colors_plt[pred_label_3d],s=1,alpha=0.8,zorder=-1)
 
 
+            pred_bbox_3d = pred_bbox_3d.numpy()
+            xy = (pred_bbox_3d[0],pred_bbox_3d[1])
+            width = pred_bbox_3d[2] - pred_bbox_3d[0]
+            height = pred_bbox_3d[3] - pred_bbox_3d[1]
+            pred_score_3d = float(pred_score_3d)
+            pred_score_3d = round(pred_score_3d, 2)
+            s = str(pred_score_3d)
 
-        # plt.imshow(car_img, extent=[-1.2, 1.2, -1.5, 1.5])
 
-        # map_path = osp.join(sample_dir, 'PRED_MAP_plot.png')
-        # plt.savefig(map_path, bbox_inches='tight', format='png',dpi=1200)
-        # plt.close()
+
+        plt.imshow(car_img, extent=[-1.2, 1.2, -1.5, 1.5])
+
+        map_path = osp.join(sample_dir, 'PRED_MAP_plot.png')
+        plt.savefig(map_path, bbox_inches='tight', format='png',dpi=1200)
+        plt.close()
 
         
         prog_bar.update()
+        
+        if i == 100:
+            break
 
     logger.info('\n DONE vis test dataset samples gt label & pred')
 if __name__ == '__main__':

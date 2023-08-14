@@ -91,7 +91,7 @@ class LiDARInstanceLines(object):
         self.fixed_num = fixed_num
         self.padding_value = padding_value
 
-        self.instance_list = instance_line_list
+        self.instance_list = instance_line_list # default nuscenes polyline
     
     @property
     def start_end_points(self):
@@ -160,8 +160,10 @@ class LiDARInstanceLines(object):
         """Returns fixed distance points with padding, valid number of points
 
         Returns:
-            instance_points_tensor: torch.Tensor([N,num_samples,2]) N the number of instances, num_samples including padding
-            instance_num_pts_tensor: torch.Tensor([N]) valid num_pts per instance
+            instance_points_tensor: torch.Tensor([N,num_samples,2]) 
+                N the number of instances, num_samples including padding
+            instance_num_pts_tensor: torch.Tensor([N]) 
+                valid num_pts per instance
         """
         assert len(self.instance_list) != 0
         assert self.sample_dist > 0
@@ -169,7 +171,7 @@ class LiDARInstanceLines(object):
         instance_points_list = []
         instance_num_pts_list = []
         for instance in self.instance_list:
-            distances = np.arange(0, instance.length, self.sample_dist)
+            distances = np.arange(0, instance.length+self.sample_dist, self.sample_dist)
             sampled_points = np.array([list(instance.interpolate(distance).coords) for distance in distances]).reshape(-1, 2)
             num_valid = len(sampled_points)
             if num_valid < self.num_samples:
@@ -833,7 +835,7 @@ class VectorizedLocalMap(object):
                                                       origin=(patch_x, patch_y), use_radians=False)
                         new_polygon = affinity.affine_transform(new_polygon,
                                                                 [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
-                        if new_polygon.geom_type is 'Polygon':
+                        if new_polygon.geom_type == 'Polygon':
                             new_polygon = MultiPolygon([new_polygon])
                         polygon_list.append(new_polygon)
 
@@ -848,7 +850,7 @@ class VectorizedLocalMap(object):
                                                       origin=(patch_x, patch_y), use_radians=False)
                         new_polygon = affinity.affine_transform(new_polygon,
                                                                 [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
-                        if new_polygon.geom_type is 'Polygon':
+                        if new_polygon.geom_type == 'Polygon':
                             new_polygon = MultiPolygon([new_polygon])
                         polygon_list.append(new_polygon)
 
@@ -858,7 +860,7 @@ class VectorizedLocalMap(object):
         if layer_name not in self.map_explorer[location].map_api.non_geometric_line_layers:
             raise ValueError("{} is not a line layer".format(layer_name))
 
-        if layer_name is 'traffic_light':
+        if layer_name == 'traffic_light':
             return None
 
         patch_x = patch_box[0]
@@ -899,7 +901,7 @@ class VectorizedLocalMap(object):
                                                       origin=(patch_x, patch_y), use_radians=False)
                     new_polygon = affinity.affine_transform(new_polygon,
                                                             [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
-                    if new_polygon.geom_type is 'Polygon':
+                    if new_polygon.geom_type == 'Polygon':
                         new_polygon = MultiPolygon([new_polygon])
                     polygon_list.append(new_polygon)
 
@@ -1350,7 +1352,7 @@ class CustomNuScenesLocalMapDataset(CustomNuScenesDataset):
             sample_token = self.data_infos[sample_id]['token']
             pred_anno['sample_token'] = sample_token
             pred_vec_list=[]
-            for i, vec in enumerate(vecs):
+            for i, vec in enumerate(vecs): # for num_vec
                 name = mapped_class_names[vec['label']]
                 anno = dict(
                     pts=vec['pts'],
@@ -1539,18 +1541,22 @@ class CustomNuScenesLocalMapDataset(CustomNuScenesDataset):
 
 
 def output_to_vecs(detection):
-    box3d = detection['boxes_3d'].numpy()
-    scores = detection['scores_3d'].numpy()
-    labels = detection['labels_3d'].numpy()
-    pts = detection['pts_3d'].numpy()
+    box3d = detection['boxes_3d'].numpy()   # [num_vec, 4]
+    scores = detection['scores_3d'].numpy() # [num_vec]
+    labels = detection['labels_3d'].numpy() # [num_vec]
+    if isinstance(detection['pts_3d'], torch.Tensor): # for fixed_num_pts (MapTR)
+        pts = detection['pts_3d'].numpy()   # [num_vec, num_pts, 2]
+    elif isinstance(detection['pts_3d'], list): # for InstaGraM
+        pts = detection['pts_3d']
+        pts = [pt.numpy() for pt in pts]    # [num_vec] list of [num_pts, 2]
 
     vec_list = []
-    for i in range(box3d.shape[0]):
+    for i in range(box3d.shape[0]): # for num_vec
         vec = dict(
             bbox = box3d[i], # xyxy
             label=labels[i],
             score=scores[i],
-            pts=pts[i],
+            pts=pts[i], # numpy
         )
         vec_list.append(vec)
     return vec_list

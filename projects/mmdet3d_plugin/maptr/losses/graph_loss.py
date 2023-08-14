@@ -41,7 +41,14 @@ class NLLLoss(torch.nn.Module):
 
 @LOSSES.register_module()
 class GraphLoss(BaseModule):
-    def __init__(self, pc_range, voxel_size, cdist_thr: float=1.5, reduction='mean', cost_class:float=1.0, cost_dist:float=5.0) -> None:
+    def __init__(self, 
+                 pc_range, 
+                 voxel_size, 
+                 cdist_thr: float=1.5, 
+                 reduction='mean', 
+                 loss_weight=dict(pts=0.1, match=0.005),
+                 cost_class:float=1.0, 
+                 cost_dist:float=5.0) -> None:
         super(GraphLoss, self).__init__()
         
         # patch_size: [30.0, 60.0] list
@@ -51,8 +58,10 @@ class GraphLoss(BaseModule):
         self.bound = (np.array(self.dx)/2 - np.array(self.bx)) # [30.0, 15.0]
         self.cdist_threshold = np.linalg.norm(cdist_thr / (2*self.bound)) # norlamize distance threshold in meter / 45.0
         self.reduction = reduction
+        self.pts_weight = loss_weight['pts']
+        self.match_weight = loss_weight['match']
 
-        self.ce_fn = torch.nn.CrossEntropyLoss()
+        # self.ce_fn = torch.nn.CrossEntropyLoss()
         self.nll_fn = torch.nn.NLLLoss()
 
     def forward(self, matches: torch.Tensor, positions: torch.Tensor, masks: torch.Tensor, vectors_gt: list):
@@ -87,9 +96,9 @@ class GraphLoss(BaseModule):
                 # cposition_valid = cposition / (torch.tensor(self.nx, device=cposition.device)-1) # normalize 0~1, N 2
                 cposition_valid = cposition[cmask == 1] # M 2; x, y
             
-                pts_list = []
-                pts_ins_list = []
-                pts_ins_order = []
+                pts_list = [] # len: P
+                pts_ins_list = [] # len: P
+                pts_ins_order = [] # len: P
                 # pts_type_list = []
                 for ins, vector in enumerate(vector_gt): # dict
                     pts, pts_num, line_type = vector['pts'], vector['pts_num'], vector['type']
@@ -106,9 +115,16 @@ class GraphLoss(BaseModule):
                     # compute chamfer distance # [N, P] shaped tensor
                     cdist = torch.cdist(cposition_valid, position_gt) # [M, P]
                     nearest_dist, nearest = cdist.min(-1) # [M, ] distances and indices of nearest position_gt -> nearest_ins = [pts_ins_list[n] for n in nearest]
+                    # nearest_dist, nearest = cdist.min(0) # [P, ] distances and indices of nearest cposition_valid -> nearest_ins = [pts_ins_list[n] for n in nearest]
 
                     if len(nearest) > 1: # at least two vertices
                         nearest_ins = []
+                        # for i, d in enumerate(nearest_dist):
+                        #     nearest_ins.append(pts_ins_list[i] if d < self.cdist_threshold else -1)
+                        # for i in range(min(nearest_ins), max(nearest_ins)+1): # for all instance IDs
+                        #     indices = [nearest[ni] for ni, x in enumerate(nearest_ins) if x == i] # ni: gt vector index, x: nearest instance ID
+                        #     ins_order = []
+                        #     [[ins_order.append(oii.item()) for oii in torch.where(nearest==oi)[0]] for oi in indices]
                         for n, d in zip(nearest, nearest_dist):
                             nearest_ins.append(pts_ins_list[n] if d < self.cdist_threshold else -1)
                         for i in range(max(nearest_ins)+1): # for all instance IDs
@@ -129,6 +145,14 @@ class GraphLoss(BaseModule):
                             match_gt[rows, multi_col] = 0.0
                             _, min_row_idx = dist_map[rows, multi_col].min(0)
                             match_gt[rows[min_row_idx], multi_col] = 1.0
+                        
+                        match_gt_sum_forward = match_gt[:-1].sum(1)
+                        multi_rows, = torch.where(match_gt_sum_forward > 1)
+                        for multi_row in multi_rows:
+                            cols, = torch.where(match_gt[multi_row, :] > 0)
+                            match_gt[multi_row, cols] = 0.0
+                            _, min_col_idx = dist_map[multi_row, cols].min(0)
+                            match_gt[multi_row, cols[min_col_idx]] = 1.0
 
                         cmask_bins = torch.cat([cmask, cmask.new_tensor(1).expand(1)], 0) # M+1
                         match_gt_sum_forward = match_gt[:-1].sum(1) # [N]
@@ -172,6 +196,8 @@ class GraphLoss(BaseModule):
 
                         # semantic_loss = self.nll_fn(semantic_valid, semantic_gt_valid)
 
+                        # _, nearest_gt = cdist.min(-1)
+                        # coord_loss = F.l1_loss(cposition_valid, position_gt[nearest_gt])                
                         coord_loss = F.l1_loss(cposition_valid, position_gt[nearest])                
                     else:
                         coord_loss = position_gt.new_tensor(0.0)
@@ -211,7 +237,7 @@ class GraphLoss(BaseModule):
         else:
             raise NotImplementedError
         
-        return closs_batch, mloss_batch, matches_gt
+        return self.pts_weight*closs_batch, self.match_weight*mloss_batch, matches_gt
 
 
 

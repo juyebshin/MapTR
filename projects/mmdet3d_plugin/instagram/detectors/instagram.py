@@ -324,6 +324,7 @@ class InstaGraM(MVXTwoStageDetector):
             bboxes (torch.Tensor): Bounding boxes with shape of (n, 5).
             labels (torch.Tensor): Labels with shape of (n, ).
             scores (torch.Tensor): Scores with shape of (n, ).
+            pts (list[torch.Tensor]): [n] list of Points shape of (num_pts, 2)
             attrs (torch.Tensor, optional): Attributes with shape of (n, ). \
                 Defaults to None.
 
@@ -339,7 +340,7 @@ class InstaGraM(MVXTwoStageDetector):
             boxes_3d=bboxes.to('cpu'),
             scores_3d=scores.cpu(),
             labels_3d=labels.cpu(),
-            pts_3d=pts.to('cpu'))
+            pts_3d=[pt.to('cpu') for pt in pts])
 
         if attrs is not None:
             result_dict['attrs_3d'] = attrs.cpu()

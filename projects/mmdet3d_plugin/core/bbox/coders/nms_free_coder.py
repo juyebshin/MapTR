@@ -248,10 +248,10 @@ class MapTRNMSFreeCoder(BaseBBoxCoder):
             pts = final_pts_preds[mask]
             labels = final_preds[mask]
             predictions_dict = {
-                'bboxes': boxes3d,
-                'scores': scores,
-                'labels': labels,
-                'pts': pts,
+                'bboxes': boxes3d,  # [num_max=50, 4]
+                'scores': scores,   # [num_max=50,]
+                'labels': labels,   # [num_max=50,]
+                'pts': pts,         # [num_max=50, num_pts=20, 2]
             }
 
         else:
@@ -272,9 +272,9 @@ class MapTRNMSFreeCoder(BaseBBoxCoder):
         Returns:
             list[dict]: Decoded boxes.
         """
-        all_cls_scores = preds_dicts['all_cls_scores'][-1]
-        all_bbox_preds = preds_dicts['all_bbox_preds'][-1]
-        all_pts_preds = preds_dicts['all_pts_preds'][-1]
+        all_cls_scores = preds_dicts['all_cls_scores'][-1]  # [bs, num_query=50, cls]
+        all_bbox_preds = preds_dicts['all_bbox_preds'][-1]  # [bs, num_query=50, 4(cs, cy, w, h)]
+        all_pts_preds = preds_dicts['all_pts_preds'][-1]    # [bs, num_query=50, num_pts=20, 2]
         batch_size = all_cls_scores.size()[0]
         predictions_list = []
         for i in range(batch_size):

@@ -193,7 +193,7 @@ class LiDARInstanceLines(object):
         instance_points_list = []
         instance_num_pts_list = []
         for instance in self.instance_list:
-            distances = np.arange(0, instance.length, self.sample_dist)
+            distances = np.arange(0, instance.length+self.sample_dist, self.sample_dist)
             sampled_points = np.array([list(instance.interpolate(distance).coords) for distance in distances]).reshape(-1, 2)
             num_valid = len(sampled_points)
             if num_valid < self.num_samples:

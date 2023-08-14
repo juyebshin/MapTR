@@ -323,7 +323,7 @@ class MapTRHead(DETRHead):
 
         Args:
             pts: the input points sets (fields), each points
-                set (fields) is represented as 2n scalar.
+                set (fields) is represented as 2n scalar. shape [bs, num_query*num_pts, 2]
             y_first: if y_fisrt=True, the point set is represented as
                 [y1, x1, y2, x2 ... yn, xn], otherwise the point set is
                 represented as [x1, y1, x2, y2 ... xn, yn].
@@ -332,8 +332,8 @@ class MapTRHead(DETRHead):
         """
         pts_reshape = pts.view(pts.shape[0], self.num_vec,
                                 self.num_pts_per_vec,2)
-        pts_y = pts_reshape[:, :, :, 0] if y_first else pts_reshape[:, :, :, 1]
-        pts_x = pts_reshape[:, :, :, 1] if y_first else pts_reshape[:, :, :, 0]
+        pts_y = pts_reshape[:, :, :, 0] if y_first else pts_reshape[:, :, :, 1] # [bs, num_query, num_pts]
+        pts_x = pts_reshape[:, :, :, 1] if y_first else pts_reshape[:, :, :, 0] # [bs, num_query, num_pts]
         if self.transform_method == 'minmax':
             # import pdb;pdb.set_trace()
 
@@ -741,6 +741,12 @@ class MapTRHead(DETRHead):
         """Generate bboxes from bbox head predictions.
         Args:
             preds_dicts (tuple[list[dict]]): Prediction results.
+                bev_embed (Tensor): shape [bev_h*bev_w, bs, dim=256]
+                all_cls_scores (Tensor): 
+                shape [num_pred(from all decoder layers), bs, num_query=50, num_classes]
+                all_bbox_preds (Tensor):
+                shape [num_pred, bs, num_query, 4=(x, y, w, h)]
+                ...
             img_metas (list[dict]): Point cloud and image's meta info.
         Returns:
             list[dict]: Decoded bbox, scores and labels after nms.
@@ -748,7 +754,7 @@ class MapTRHead(DETRHead):
         # bboxes: xmin, ymin, xmax, ymax
         preds_dicts = self.bbox_coder.decode(preds_dicts)
 
-        num_samples = len(preds_dicts)
+        num_samples = len(preds_dicts) # batch size
         ret_list = []
         for i in range(num_samples):
             preds = preds_dicts[i]

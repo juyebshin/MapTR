@@ -9,6 +9,7 @@ import numpy as np
 from mmcv.runner.base_module import BaseModule, ModuleList, Sequential
 from mmcv.cnn.bricks.registry import TRANSFORMER_LAYER_SEQUENCE, FEEDFORWARD_NETWORK
 from mmcv.cnn import build_norm_layer
+from mmdet.datasets.pipelines import to_tensor
 
 
 def MLP(channels: list, do_bn=True, norm_type='BN1d'):
@@ -276,3 +277,143 @@ class GraphEncoder(BaseModule):
         """
         input = embedding.transpose(1, 2) # [b, C, N] C = 3 for vertices, C = 64 for dt
         return self.encoder(input) # [b, 256, N]
+    
+def vectorize_graph(positions: torch.Tensor, match: torch.Tensor, mask: torch.Tensor, match_threshold=0.1):
+    """ Vectorize from graph representations in CPU mode
+
+    Args:
+    ----------
+    positions: torch.Tensor, match: torch.Tensor, mask: torch.Tensor
+    @ positions: c N 3
+    @ match: c N+1 N+1 
+    @ mask: c N 1 
+    @ patch_size: (30.0, 60.0)
+
+    Returns:
+    simplified_coords: [ins] list of [K, 2] poiny arrays
+    confidences: [ins] list of float
+    line_types: [ins] list of index
+    """
+    assert match.shape[1] == match.shape[2], f"match.shape[1]: {match.shape[1]} != match.shape[2]: {match.shape[2]}"
+    assert positions.shape[1]  == mask.shape[1], f"Following shapes mismatch: positions.shape[1]({positions.shape[1]}), mask.shape[1]({mask.shape[1]}"
+
+    match = match.exp().cpu()
+    positions = positions.cpu().numpy()
+    mask = mask.squeeze(-1).cpu() # c N
+    bins = torch.ones([mask.shape[0]], device=mask.device).view(mask.shape[0], 1) # c 1
+    mask_bin = torch.cat([mask, bins], -1) # c N+1
+
+    confidences = []
+    line_types = []
+    simplified_coords = []
+    for i, (cpositions, cmatch, cmask_bin) in enumerate(zip(positions, match, mask_bin)):
+        # cpositions: N 3
+        # cmatch: N+1 N+1
+        # cmask_bin: N+1
+        cpositions = cpositions[mask[i] == 1] # M 3
+        cmatch = cmatch[cmask_bin == 1][:, cmask_bin == 1] # M+1 M+1
+        if cmatch.shape[0] < 3:
+            continue
+        # adj_mat = torch.zeros_like(match[:-1]) # [M, M+1]
+        adj_mat = cmatch[:-1, :-1] > match_threshold # M M for > threshold
+        t2scores, t2indices = torch.topk(cmatch[:-1, :-1], 2, -1) # M 2; for top-2
+        t2mat = cmatch.new_full(cmatch[:-1, :-1].shape, 0, dtype=torch.bool)
+        t2mat = t2mat.scatter_(1, t2indices, 1) # M M
+        adj_mat = adj_mat & t2mat # M M
+
+        single_class_adj_list = torch.nonzero(adj_mat).numpy() # M' 2; symmetric single_class_adj_list[:, 0] -> single_class_adj_list[:, 1]
+        if single_class_adj_list.shape[0] == 0:
+            continue
+        # single_class_adj_list = np.vstack([single_class_adj_list, np.flip(single_class_adj_list, 1)]) for top 1
+        single_inst_adj_list = single_class_adj_list
+        single_class_adj_score = cmatch[single_class_adj_list[:, 0], single_class_adj_list[:, 1]].numpy() # [M'] confidence
+
+        coords = cpositions[..., :-1] # M 2
+        prob = cpositions[..., -1] # M
+        # prob = prob[single_inst_adj_list[:, 0]] # [M,]
+
+        while True:
+            if single_inst_adj_list.shape[0] == 0:
+                break
+
+            cur, next = single_inst_adj_list[0] # cur -> next
+            init_cur_idx, _ = np.where(single_inst_adj_list[:, :-1] == cur) # two or one
+            single_inst_coords = np.expand_dims(coords[cur], 0) # [1, 2]
+            single_inst_confidence = np.expand_dims(prob[cur], 0) # [1, 1] np array
+            cur_taken = [cur]
+
+            for ici in init_cur_idx: # one or two
+                cur, next = single_inst_adj_list[0] # cur -> next
+                single_inst_adj_list = np.delete(single_inst_adj_list, 0, 0)
+                while True:
+                    next_idx = np.where(single_inst_adj_list[:, :-1] == next)[0]
+                    next_adj = single_inst_adj_list[next_idx, -1]
+                    if cur not in cur_taken and cur in next_adj:
+                        single_inst_coords = np.vstack((single_inst_coords, coords[cur])) # [num_pts, 2]
+                        single_inst_confidence = np.vstack((single_inst_confidence, prob[cur])) # [num_pts, 1]
+                        cur_taken.append(cur)
+                    if cur == next:
+                        break
+                    cur = next
+                    cur_idx, _ = np.where(single_inst_adj_list[:, :-1] == cur) # two or one
+                    for ci in cur_idx:
+                        next_candidate = single_inst_adj_list[ci, 1]
+                        if next_candidate not in cur_taken:
+                            next = next_candidate # update next
+                    single_inst_adj_list = np.delete(single_inst_adj_list, cur_idx, 0)
+                
+                # reverse
+                single_inst_coords = np.flipud(single_inst_coords)
+                single_inst_confidence = np.flipud(single_inst_confidence)
+                cur_taken.reverse()
+
+            # # backup 20220723
+            # cur, next = single_inst_adj_list[0] # cur -> next
+            # cur_idx, _ = np.where(single_inst_adj_list[:, :-1] == cur)
+            # single_inst_coords = np.expand_dims(np.hstack([positions[cur], cur]), 0) # [1, 3] np array
+            # single_inst_confidence = prob[cur] # [1] np array
+            # cur_taken = [cur]
+            # next_taken = cur_taken.copy()
+
+            # while len(cur_idx):
+            #     next_list = []
+            #     for ci in cur_idx:
+            #         cur, next = single_inst_adj_list[ci] # cur -> next
+            #         next_idx = np.where(single_inst_adj_list[:, :-1] == next)[0]
+            #         next_adj = single_inst_adj_list[next_idx, -1]
+            #         if next not in cur_taken and cur in next_adj: # if cur, next have bidirectional connection
+            #             single_inst_coords = np.vstack((single_inst_coords, np.hstack([positions[next], next]))) # [num, 3]
+            #             single_inst_confidence = np.vstack((single_inst_confidence, prob[next])) # [num, 1]
+            #             next_list.append(next)
+            #             cur_taken.append(next)
+            #     single_inst_adj_list = np.delete(single_inst_adj_list, cur_idx, 0)
+            #     next_idx = []
+            #     for next in next_list:
+            #         if next not in next_taken:
+            #             next_taken.append(next)
+            #             indices, _ = np.where(single_inst_adj_list[:, :-1] == next)
+            #             [next_idx.append(idx) for idx in indices]
+            #     cur_idx = next_idx
+            
+            assert len(cur_taken) == len(single_inst_coords)
+            
+            # range_0 = np.max(single_inst_coords[:, 0]) - np.min(single_inst_coords[:, 0])
+            # range_1 = np.max(single_inst_coords[:, 1]) - np.min(single_inst_coords[:, 1])
+            # if range_0 > range_1:
+            #     single_inst_coords = sorted(single_inst_coords, key=lambda x: x[0])
+            # else:
+            #     single_inst_coords = sorted(single_inst_coords, key=lambda x: x[1])
+            
+            # single_inst_coords = np.stack(single_inst_coords) # [num, 3]
+            # single_inst_coords = sort_indexed_points_by_dist(single_inst_coords)
+            # single_inst_coords = single_inst_coords.astype('int32') # [num, 3]
+            # single_inst_coords = connect_by_adj_list(single_inst_coords, single_class_adj_list, single_class_adj_score)
+            
+            if single_inst_coords.shape[0] < 2:
+                continue
+            
+            simplified_coords.append(to_tensor(single_inst_coords.copy())) # [num, num_pts, 2]
+            confidences.append(single_inst_confidence.mean()) # [num]
+            line_types.append(i) # [num]
+    
+    return simplified_coords, torch.tensor(confidences), torch.tensor(line_types)
