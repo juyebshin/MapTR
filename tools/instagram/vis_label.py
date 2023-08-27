@@ -293,7 +293,8 @@ def main():
                     # plt.Rectangle(xy, width, height,color=colors_plt[gt_label_3d])
                 # continue
             elif vis_format == 'fixed_num_pts':
-                plt.figure(figsize=(2, 4))
+                figsize = (4, 4) if pc_range[0] == pc_range[1] else (2, 4)
+                plt.figure(figsize=figsize)
                 plt.xlim(pc_range[0], pc_range[3])
                 plt.ylim(pc_range[1], pc_range[4])
                 plt.axis('off')
@@ -371,13 +372,13 @@ def main():
                 dt_color_mask = cmap(dt.max(0))[..., :3] * 255 # 400, 200, 3
                 Image.fromarray(dt_color_mask.astype('uint8')).save(osp.join(sample_dir, 'GT_distance_transform_MAP.png'))
                 
-                vt = map_dict['vertex_mask'] * 255 # 3, 64, 50, 25
-                C, _, Hc, Wc = vt.shape
-                vt = vt.transpose(0, 2, 3, 1) # 3, 50, 25, 64
-                vt = np.reshape(vt, [C, Hc, Wc, 8, 8]) # 3, 50, 25, 8, 8
-                vt = np.transpose(vt, [0, 1, 3, 2, 4]) # 3, 50, 8, 25, 8
-                vt = np.reshape(vt, [C, Hc*8, Wc*8]) # 3, 400, 200
-                vt_color_mask = cmap(vt.max(0))[..., :3] * 255 # 400, 200, 3
+                vt = map_dict['vertex_mask'][:-1, ...] * 255 # 64, 50, 25
+                _, Hc, Wc = vt.shape
+                vt = vt.transpose(1, 2, 0) # 50, 25, 64
+                vt = np.reshape(vt, [Hc, Wc, 8, 8]) # 50, 25, 8, 8
+                vt = np.transpose(vt, [0, 2, 1, 3]) # 50, 8, 25, 8
+                vt = np.reshape(vt, [Hc*8, Wc*8]) # 400, 200
+                vt_color_mask = cmap(vt)[..., :3] * 255 # 400, 200, 3
                 Image.fromarray(vt_color_mask.astype('uint8')).save(osp.join(sample_dir, 'GT_vertex_mask_MAP.png'))
 
             else: 

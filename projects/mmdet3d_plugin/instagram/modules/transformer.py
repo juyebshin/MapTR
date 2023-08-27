@@ -332,8 +332,8 @@ class InstaGraMPerceptionTransformer(BaseModule):
         # query = query.permute(1, 0, 2)
         # query_pos = query_pos.permute(1, 0, 2)
         # bev_embed = bev_embed.permute(1, 0, 2) # bev_h*bev_w, bs, embed_dims=256
-        bev_embed = bev_embed.reshape(bs, bev_h, bev_w, self.embed_dims).permute(0, 3, 1, 2) # bs, bev_h=200, bev_w=100, embed_dims=256
+        bev_embed = bev_embed.reshape(bs, bev_h, bev_w, self.embed_dims).permute(0, 3, 1, 2).contiguous() # bs, bev_h=200, bev_w=100, embed_dims=256
 
-        vertex, distance, matches, vertices, masks = self.decoder(bev_embed)
+        vertex, distance, matches, vertices, graph_cls, masks = self.decoder(bev_embed)
 
-        return bev_embed, vertex, distance, matches, vertices, masks
+        return bev_embed, vertex, distance, matches, vertices, graph_cls, masks

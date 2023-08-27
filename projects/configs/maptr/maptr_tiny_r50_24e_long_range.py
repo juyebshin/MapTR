@@ -9,8 +9,9 @@ plugin_dir = 'projects/mmdet3d_plugin/'
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
 # point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
-point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
-voxel_size = [0.15, 0.15, 4]
+# point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
+point_cloud_range = [-50.0, -50.0, -2.0, 50.0, 50.0, 2.0]
+voxel_size = [0.5, 0.5, 4]
 
 
 
@@ -29,8 +30,6 @@ map_classes = ['divider', 'ped_crossing','boundary']
 # map_classes = ['divider',]
 fixed_ptsnum_per_gt_line = 20 # now only support fixed_pts > 0
 fixed_ptsnum_per_pred_line = 20
-fixed_ptsnum_per_gt = 400
-sample_dist = 1.5
 eval_use_same_gt_sample_num_flag=True
 num_map_classes = len(map_classes)
 
@@ -47,16 +46,12 @@ _ffn_dim_ = _dim_*2
 _num_levels_ = 1
 # bev_h_ = 50
 # bev_w_ = 50
-bev_h_ = 200
+bev_h_ = 100
 bev_w_ = 100
 queue_length = 1 # each sequence contains `queue_length` frames.
 
-# InstaGraM
-use_dist_embed = True
-find_unused_parameters = True
-
 model = dict(
-    type='InstaGraM',
+    type='MapTR',
     use_grid_mask=True,
     video_test_mode=False,
     pretrained=dict(img='ckpts/resnet50-19c8e357.pth'),
@@ -78,16 +73,26 @@ model = dict(
         num_outs=_num_levels_,
         relu_before_extra_convs=True),
     pts_bbox_head=dict(
-        type='InstaGraMHead',
-        num_classes=num_map_classes,
+        type='MapTRHead',
         bev_h=bev_h_,
         bev_w=bev_w_,
-        voxel_size=voxel_size,
-        as_two_stage=False,
-        sample_dist=sample_dist,
+        num_query=900,
+        num_vec=50,
+        num_pts_per_vec=fixed_ptsnum_per_pred_line, # one bbox
+        num_pts_per_gt_vec=fixed_ptsnum_per_gt_line,
+        dir_interval=1,
+        query_embed_type='instance_pts',
         transform_method='minmax',
+        gt_shift_pts_pattern='v2',
+        num_classes=num_map_classes,
+        in_channels=_dim_,
+        sync_cls_avg_factor=True,
+        with_box_refine=True,
+        as_two_stage=False,
+        code_size=2,
+        code_weights=[1.0, 1.0, 1.0, 1.0],
         transformer=dict(
-            type='InstaGraMPerceptionTransformer',
+            type='MapTRPerceptionTransformer',
             rotate_prev_bev=True,
             use_shift=True,
             use_can_bus=True,
@@ -121,133 +126,70 @@ model = dict(
                     feedforward_channels=_ffn_dim_,
                     ffn_dropout=0.1,
                     operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
-                                     'ffn', 'norm'))
-                ), # encoder
+                                     'ffn', 'norm'))),
             decoder=dict(
-                type='InstaGraMDecoder',
-                vertex_decoder=dict(
-                    type='ElementDecoder',
-                    bev_encoder=dict(
-                        type='ResNet',
-                        depth=18,
-                        in_channels=_dim_,
-                        base_channels=_pos_dim_,
-                        num_stages=1,
-                        strides=(1,),
-                        dilations=(1,),
-                        out_indices=(0,),
-                        ),
-                    conv_cfg=dict(
-                        type='Conv2d',
-                        in_channels=_pos_dim_,
-                        out_channels=65, # class-wise: num_map_classes, else: 65
-                        kernel_size=1,
-                        stride=1,
-                        padding=0,
-                    ),
-                    ),
-                distance_decoder=dict(
-                    type='ElementDecoder',
-                    bev_encoder=dict(
-                        type='ResNet',
-                        depth=18,
-                        in_channels=_dim_,
-                        base_channels=_pos_dim_,
-                        num_stages=1,
-                        strides=(1,),
-                        dilations=(1,),
-                        out_indices=(0,),
-                        ),
-                    conv_cfg=dict(
-                        type='Conv2d',
-                        in_channels=_pos_dim_,
-                        out_channels=num_map_classes if use_dist_embed else _dim_,
-                        kernel_size=1,
-                        stride=1,
-                        padding=0,
-                    ),
-                    bev_decoder=dict(
-                        upsample_cfg=dict(
-                            type='bilinear',
-                            scale_factor=2,
-                            align_corners=True,
-                            ),
-                        plugin_cfg=dict(
-                            type='ConvModule',
-                            kernel_size=3,
-                            padding=1,
-                            bias=False,
-                            norm_cfg=dict(type='BN'),
-                            act_cfg=dict(type='ReLU', inplace=True),
-                        ),
-                        in_channels=_pos_dim_,
-                        blocks=(128, 128, _pos_dim_),
-                    ) if use_dist_embed else None,
-                    ),
-                graph_encoder=dict(
-                    type='GraphEncoder',
-                    embed_dim=_dim_,
-                    layers=[_pos_dim_//2, _pos_dim_, _dim_],
-                    norm_type='BN1d',
-                    ),
-                attn_cfg=dict(
-                    type='AttentionalGNN',
-                    embed_dim=_dim_,
-                    norm_type='BN1d',
-                ),
-                num_classes=num_map_classes,
-                cell_size=8,
-                use_dist_embed=use_dist_embed,
-                # pc_range=point_cloud_range,
-                # voxel_size=voxel_size,
-                dist_thr=10.0,
-                vertex_thr=0.01,
-                num_vertices=fixed_ptsnum_per_gt,
-                embed_dim=_dim_,
-                pos_freq=10,
-                sinkhorn_iters=100,
-                num_gnn_layers=9,
-                ), # decoder
-            ), # transformer
+                type='MapTRDecoder',
+                num_layers=6,
+                return_intermediate=True,
+                transformerlayers=dict(
+                    type='DetrTransformerDecoderLayer',
+                    attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=_dim_,
+                            num_heads=8,
+                            dropout=0.1),
+                         dict(
+                            type='CustomMSDeformableAttention',
+                            embed_dims=_dim_,
+                            num_levels=1),
+                    ],
+
+                    feedforward_channels=_ffn_dim_,
+                    ffn_dropout=0.1,
+                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
+                                     'ffn', 'norm')))),
+        bbox_coder=dict(
+            type='MapTRNMSFreeCoder',
+            # post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+            post_center_range=[-20, -35, -20, -35, 20, 35, 20, 35],
+            pc_range=point_cloud_range,
+            max_num=50,
+            voxel_size=voxel_size,
+            num_classes=num_map_classes),
         positional_encoding=dict(
             type='LearnedPositionalEncoding',
             num_feats=_pos_dim_,
             row_num_embed=bev_h_,
             col_num_embed=bev_w_,
             ),
-        loss_vtx=dict(
-            type='CrossEntropyLoss',
-            use_sigmoid=False,
-            class_weight=None,
-            loss_weight=1.0,), # 2.0
-        loss_dtm=dict(
-            type='MSELoss',
-            loss_weight=1.0,), # 5.0
-        loss_graph=dict(
-            type='GraphLoss',
-            pc_range=point_cloud_range,
-            voxel_size=voxel_size,
-            cdist_thr=1.5,
-            reduction='mean',
-            loss_weight=dict(cls=0.01, match=0.001)), # 0.1, 0.005
-    ), # pts_bbox_head
+        loss_cls=dict(
+            type='FocalLoss',
+            use_sigmoid=True,
+            gamma=2.0,
+            alpha=0.25,
+            loss_weight=2.0),
+        loss_bbox=dict(type='L1Loss', loss_weight=0.0),
+        loss_iou=dict(type='GIoULoss', loss_weight=0.0),
+        loss_pts=dict(type='PtsL1Loss', 
+                      loss_weight=5.0),
+        loss_dir=dict(type='PtsDirCosLoss', loss_weight=0.005)),
     # model training and testing settings
-    # train_cfg=dict(pts=dict(
-    #     grid_size=[512, 512, 1],
-    #     voxel_size=voxel_size,
-    #     point_cloud_range=point_cloud_range,
-    #     out_size_factor=4,
-    #     assigner=dict(
-    #         type='MapTRAssigner',
-    #         cls_cost=dict(type='FocalLossCost', weight=2.0),
-    #         reg_cost=dict(type='BBoxL1Cost', weight=0.0, box_format='xywh'),
-    #         # reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
-    #         # iou_cost=dict(type='IoUCost', weight=1.0), # Fake cost. This is just to make it compatible with DETR head.
-    #         iou_cost=dict(type='IoUCost', iou_mode='giou', weight=0.0),
-    #         pts_cost=dict(type='OrderedPtsL1Cost', 
-    #                   weight=5),
-    #         pc_range=point_cloud_range)))
-    )
+    train_cfg=dict(pts=dict(
+        grid_size=[512, 512, 1],
+        voxel_size=voxel_size,
+        point_cloud_range=point_cloud_range,
+        out_size_factor=4,
+        assigner=dict(
+            type='MapTRAssigner',
+            cls_cost=dict(type='FocalLossCost', weight=2.0),
+            reg_cost=dict(type='BBoxL1Cost', weight=0.0, box_format='xywh'),
+            # reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
+            # iou_cost=dict(type='IoUCost', weight=1.0), # Fake cost. This is just to make it compatible with DETR head.
+            iou_cost=dict(type='IoUCost', iou_mode='giou', weight=0.0),
+            pts_cost=dict(type='OrderedPtsL1Cost', 
+                      weight=5),
+            pc_range=point_cloud_range))))
 
 dataset_type = 'CustomNuScenesLocalMapDataset'
 data_root = 'data/nuscenes/'
@@ -302,8 +244,6 @@ data = dict(
         bev_size=(bev_h_, bev_w_),
         pc_range=point_cloud_range,
         fixed_ptsnum_per_line=fixed_ptsnum_per_gt_line,
-        sample_dist=sample_dist,
-        num_samples=fixed_ptsnum_per_gt,
         eval_use_same_gt_sample_num_flag=eval_use_same_gt_sample_num_flag,
         padding_value=-10000,
         map_classes=map_classes,
@@ -318,8 +258,6 @@ data = dict(
              pipeline=test_pipeline,  bev_size=(bev_h_, bev_w_),
              pc_range=point_cloud_range,
              fixed_ptsnum_per_line=fixed_ptsnum_per_gt_line,
-             sample_dist=sample_dist,
-             num_samples=fixed_ptsnum_per_gt,
              eval_use_same_gt_sample_num_flag=eval_use_same_gt_sample_num_flag,
              padding_value=-10000,
              map_classes=map_classes,
@@ -331,11 +269,8 @@ data = dict(
               pipeline=test_pipeline, bev_size=(bev_h_, bev_w_),
               pc_range=point_cloud_range,
               fixed_ptsnum_per_line=fixed_ptsnum_per_gt_line,
-              sample_dist=sample_dist,
-              num_samples=fixed_ptsnum_per_gt,
               eval_use_same_gt_sample_num_flag=eval_use_same_gt_sample_num_flag,
               padding_value=-10000,
-              padding=True,
               map_classes=map_classes,
               classes=class_names, modality=input_modality),
     shuffler_sampler=dict(type='DistributedGroupSampler'),
@@ -343,15 +278,15 @@ data = dict(
 )
 
 optimizer = dict(
-    type='Adam',
-    lr=1e-3,
+    type='AdamW',
+    lr=6e-4,
     paramwise_cfg=dict(
         custom_keys={
             'img_backbone': dict(lr_mult=0.1),
         }),
-    weight_decay=1e-7)
+    weight_decay=0.01)
 
-optimizer_config = dict(grad_clip=dict(max_norm=5, norm_type=2))
+optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',
@@ -359,13 +294,6 @@ lr_config = dict(
     warmup_iters=500,
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3)
-# lr_config = dict(
-#     policy='step',
-#     # warmup='linear',
-#     # warmup_iters=500,
-#     # warmup_ratio=1.0 / 3,
-#     step=10,
-#     gamma=0.1)
 total_epochs = 24
 # total_epochs = 50
 # evaluation = dict(interval=1, pipeline=test_pipeline)
@@ -380,4 +308,4 @@ log_config = dict(
         dict(type='TensorboardLoggerHook')
     ])
 fp16 = dict(loss_scale=512.)
-checkpoint_config = dict(interval=2) # interval=5
+checkpoint_config = dict(interval=1)

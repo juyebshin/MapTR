@@ -206,12 +206,13 @@ class InstaGraMHead(BaseModule):
                 prev_bev=prev_bev
         )
 
-        bev_embed, vertex, distance, matches, vertices, masks = outputs
+        bev_embed, vertex, distance, matches, vertices, graph_cls, masks = outputs
         outs = {
             'bev_embed': bev_embed,
             'bev_pts_scores': vertex,
             'bev_embed_preds': distance,
             'pts_preds': vertices,
+            'cls_preds': graph_cls,
             'adj_preds': matches,
             'pts_masks': masks,
         }
@@ -389,6 +390,7 @@ class InstaGraMHead(BaseModule):
                     bev_pts_scores,
                     bev_embed_preds,
                     pts_preds,
+                    cls_preds,
                     adj_preds,
                     pts_masks,
                     gt_vectors_list,
@@ -398,36 +400,38 @@ class InstaGraMHead(BaseModule):
         feature level.
         Args:
             bev_pts_scores (Tensor): Vertex classification score in BEV, 
-                has shape [bs, num_classes, h//8, w//8].
+                has shape [bs, cs*cs+1, h//8, w//8].
             bev_embed_preds (Tensor): Distance transform map in BEV                    
                 has shape [bs, num_classes, h, w].
             pts_preds (Tensor): Vertex coordinates in BEV, normalized
-                format (x, y, score), has shape (bs, num_classes, N, 3).
+                format (x, y, score), has shape (bs, N, 3).
+            cls_preds (Tensor): Vertex classification, 
+                has shape (bs, num_classes, N).
             adj_preds (Tensor): Adjacency score matrix of vertices, 
-                has shape (bs, num_classes, N+1, N+1). N+1 includes dustbin
+                has shape (bs, N+1, N+1). N+1 includes dustbin
                 score.
             pts_masks (Tensor): Mask for valid vertices as float
-                (0.0 or 1.0), has shape (bs, num_classes, N, 1).
+                (0.0 or 1.0), has shape (bs, N, 1).
             gt_vectors_list (list[list[dict]]): Ground truth vectors
                 (bs) length list of (num_gt) list of dict('pts', 'pts_num', 'type').
             gt_vtm (Tensor): List of vertex score map
-                has shape (bs, num_classes, cs*cs, h//8, w//8).
+                has shape (bs, cs*cs+1, h//8, w//8).
             gt_dtm (Tensor): Mask for valid vertices as float
                 has shape (bs, num_classes, h, w).
         Returns:
             dict[str, Tensor]: A dictionary of loss components for outputs from
                 a single decoder layer.
         """
-        loss_vtx = self.loss_vtx(bev_pts_scores, gt_vtm.max(2)[0])
+        loss_vtx = self.loss_vtx(bev_pts_scores, gt_vtm)
         loss_dtm = self.loss_dtm(bev_embed_preds.sigmoid(), gt_dtm)
-        loss_pts, loss_match, gt_adj_mat = self.loss_graph(adj_preds, pts_preds, pts_masks, gt_vectors_list)
+        loss_cls, loss_match, gt_adj_mat, gt_labels = self.loss_graph(adj_preds, pts_preds, cls_preds, pts_masks, gt_vectors_list)
 
         if digit_version(TORCH_VERSION) >= digit_version('1.8'):
             loss_vtx = torch.nan_to_num(loss_vtx)
             loss_dtm = torch.nan_to_num(loss_dtm)
-            loss_pts = torch.nan_to_num(loss_pts)
+            loss_cls = torch.nan_to_num(loss_cls)
             loss_match = torch.nan_to_num(loss_match)
-        return loss_vtx, loss_dtm, loss_pts, loss_match, gt_adj_mat
+        return loss_vtx, loss_dtm, loss_cls, loss_match #, gt_adj_mat, gt_labels
 
     @force_fp32(apply_to=('preds_dicts'))
     def loss(self,
@@ -445,16 +449,18 @@ class InstaGraMHead(BaseModule):
                 image with shape (num_gts, ).
             preds_dicts:
                 bev_pts_scores (Tensor): Vertex classification score in BEV, 
-                    has shape [bs, num_classes, h//8, w//8].
+                    has shape [bs, cs*cs+1, h//8, w//8].
                 bev_embed_preds (Tensor): Distance transform map in BEV                    
                     has shape [bs, num_classes, h, w].
                 pts_preds (Tensor): Vertex coordinates in BEV, normalized
-                    format (x, y, score), has shape (bs, num_classes, N, 3).
+                    format (x, y, score), has shape (bs, N, 3).
+                cls_preds (Tensor): Vertex classification, 
+                    has shape (bs, num_classes, N).
                 adj_preds (Tensor): Adjacency score matrix of vertices, 
-                    has shape (bs, num_classes, N+1, N+1). N+1 includes dustbin
+                    has shape (bs, N+1, N+1). N+1 includes dustbin
                     score.
                 pts_masks (Tensor): Mask for valid vertices as float
-                    (0.0 or 1.0), has shape (bs, num_classes, N, 1).
+                    (0.0 or 1.0), has shape (bs, N, 1).
             gt_bboxes_ignore (list[Tensor], optional): Bounding boxes
                 which can be ignored for each image. Default None.
         Returns:
@@ -469,6 +475,7 @@ class InstaGraMHead(BaseModule):
         bev_pts_scores = preds_dicts['bev_pts_scores'] # (bs, 3, h//8, w//8)
         bev_embed_preds = preds_dicts['bev_embed_preds'] # (bs, 3, h, w)
         pts_preds  = preds_dicts['pts_preds'] # (bs, 3, N, 3)
+        cls_preds  = preds_dicts['cls_preds'] # (bs, 3, N)
         adj_preds = preds_dicts['adj_preds'] # (bs, 3, N+1, N+1)
         pts_masks = preds_dicts['pts_masks'] # (bs, 3, N, 1)
 
@@ -486,11 +493,11 @@ class InstaGraMHead(BaseModule):
             gt_vectors_list.append(prep_dict['gt_vectors'])
             gt_vtm_list.append(to_tensor(prep_dict['vertex_mask']).to(device))
             gt_dtm_list.append(to_tensor(prep_dict['distance_transform']).to(device))
-        gt_vtm = torch.stack(gt_vtm_list).to(device)
+        gt_vtm = torch.stack(gt_vtm_list).to(device).long().argmax(1) # b h w
         gt_dtm = torch.stack(gt_dtm_list).to(device)
 
-        loss_vtx, loss_dtm, loss_pts, loss_match, gt_adj_mat = self.loss_single(
-            bev_pts_scores, bev_embed_preds, pts_preds,
+        loss_vtx, loss_dtm, loss_cls, loss_match = self.loss_single(
+            bev_pts_scores, bev_embed_preds, pts_preds, cls_preds,
             adj_preds, pts_masks, gt_vectors_list, gt_vtm, gt_dtm)
 
         loss_dict = dict()
@@ -513,7 +520,7 @@ class InstaGraMHead(BaseModule):
         # loss from the last decoder layer
         loss_dict['loss_vtx'] = loss_vtx
         loss_dict['loss_dtm'] = loss_dtm
-        loss_dict['loss_pts'] = loss_pts
+        loss_dict['loss_cls'] = loss_cls
         loss_dict['loss_match'] = loss_match
         # loss_dict['gt_adj_mat'] = gt_adj_mat
         # loss from other decoder layers
@@ -525,7 +532,7 @@ class InstaGraMHead(BaseModule):
         Args:
             preds_dicts:
                 bev_pts_scores (Tensor): Vertex classification score in BEV, 
-                    has shape [bs, num_classes, h//8, w//8].
+                    has shape [bs, cell*cell+1, h//8, w//8].
                 bev_embed_preds (Tensor): Distance transform map in BEV                    
                     has shape [bs, num_classes, h, w].
                 pts_preds (Tensor): Vertex coordinates in BEV, normalized
@@ -548,6 +555,7 @@ class InstaGraMHead(BaseModule):
             # labels: tensor [num_vec]
             pts, scores, labels = vectorize_graph(preds_dicts['pts_preds'][i], 
                                                   preds_dicts['adj_preds'][i],
+                                                  preds_dicts['cls_preds'][i],
                                                   preds_dicts['pts_masks'][i])
             if len(pts) == 0:
                 bboxes = scores.new_tensor([])

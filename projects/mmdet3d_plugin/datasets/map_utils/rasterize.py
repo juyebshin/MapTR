@@ -188,37 +188,36 @@ def preprocess_map(gt_dict, # dict('gt_labels_3d'=torch.tensor, 'gt_bboxes_3d'=L
     # canvas_size: tuple (int, int)
     # vertex_masks: 3, 200, 400
     vertex_masks = np.stack(vertex_masks)
-    # vertex_masks = vertex_masks.max(0) # 200, 400
-    C, H, W = vertex_masks.shape # 3, 200, 400
+    vertex_masks = vertex_masks.max(0) # 200, 400
+    H, W = vertex_masks.shape # 200, 400
     Hc, Wc = int(H/cell_size), int(W/cell_size)
-    vertex_masks = np.reshape(vertex_masks, [C, Hc, cell_size, Wc, cell_size]) # 3, Hc, 8, Wc, 8
-    vertex_masks = np.transpose(vertex_masks, [0, 1, 3, 2, 4]) # 3, Hc, Wc, 8, 8
-    vertex_masks = np.reshape(vertex_masks, [C, Hc, Wc, cell_size*cell_size]) # 3, Hc, Wc, 64
-    vertex_masks = vertex_masks.transpose(0, 3, 1, 2) # 3, 64, Hc, Wc
-    for c, vertex_mask in enumerate(vertex_masks): # for every class,
-        vertex_sum = vertex_mask.sum(0) # number of vertex in each cell, [Hc, Wc]
-        # find cell with more then one vertex
-        rows, cols = np.where(vertex_sum > 1)
-        # N == len(rows) == len(cols)
-        if len(rows):
-            multi_vertex = vertex_mask[:, [row for row in rows], [col for col in cols]].transpose(1, 0) # N, 64
-            index, depth = np.where(multi_vertex > 0)
-            nums_multi_vertex = np.histogram(index, bins=len(rows), range=(0, len(rows)))[0]
-            select = np.random.randint(nums_multi_vertex)
-            nums_cum = np.insert(np.cumsum(nums_multi_vertex[:-1]), 0, 0)
-            select_cum = select + nums_cum
-            remove_index = np.delete(index, select_cum)
-            remove_depth = np.delete(depth, select_cum)
-            multi_vertex[[i for i in remove_index], [d for d in remove_depth]] = 0
-            vertex_masks[c, :, [row for row in rows], [col for col in cols]] = multi_vertex
-    vertex_sum = vertex_masks.sum(1) # number of vertex in each cell, 3, Hc, Wc
+    vertex_masks = np.reshape(vertex_masks, [Hc, cell_size, Wc, cell_size]) # Hc, 8, Wc, 8
+    vertex_masks = np.transpose(vertex_masks, [0, 2, 1, 3]) # Hc, Wc, 8, 8
+    vertex_masks = np.reshape(vertex_masks, [Hc, Wc, cell_size*cell_size]) # Hc, Wc, 64
+    vertex_masks = vertex_masks.transpose(2, 0, 1) # 64, Hc, Wc
+    vertex_sum = vertex_masks.sum(0) # number of vertex in each cell, [Hc, Wc]
+    # find cell with more then one vertex
+    rows, cols = np.where(vertex_sum > 1)
+    # N == len(rows) == len(cols)
+    if len(rows):
+        multi_vertex = vertex_masks[:, [row for row in rows], [col for col in cols]].transpose(1, 0) # N, 64
+        index, depth = np.where(multi_vertex > 0)
+        nums_multi_vertex = np.histogram(index, bins=len(rows), range=(0, len(rows)))[0]
+        select = np.random.randint(nums_multi_vertex)
+        nums_cum = np.insert(np.cumsum(nums_multi_vertex[:-1]), 0, 0)
+        select_cum = select + nums_cum
+        remove_index = np.delete(index, select_cum)
+        remove_depth = np.delete(depth, select_cum)
+        multi_vertex[[i for i in remove_index], [d for d in remove_depth]] = 0
+        vertex_masks[:, [row for row in rows], [col for col in cols]] = multi_vertex.transpose(1, 0)
+    vertex_sum = vertex_masks.sum(0) # number of vertex in each cell, Hc, Wc
     assert np.max(vertex_sum) <= 1, f"max(vertex_sum) expected less than 1, but got: {np.max(vertex_sum)}" # make sure one vertex per cell
-    # # randomly select one vertex and remove all others
-    # dust = np.zeros_like(vertex_sum[0], dtype='uint8') # Hc, Wc
-    # dust[vertex_sum == 0] = 1
-    # dust = np.expand_dims(dust, axis=1) # 3, 1, Hc, Wc
-    # vertex_masks = np.concatenate((vertex_masks, dust), axis=1) # 3, 65, Hc, Wc
-    # assert np.min(vertex_masks.sum(1)) == 1
+    # randomly select one vertex and remove all others
+    dust = np.zeros_like(vertex_sum, dtype='uint8') # Hc, Wc
+    dust[vertex_sum == 0] = 1
+    dust = np.expand_dims(dust, axis=0) # 1, Hc, Wc
+    vertex_masks = np.concatenate((vertex_masks, dust), axis=0) # 65, Hc, Wc
+    assert np.min(vertex_masks.sum(0)) == 1
 
     distance_masks = np.stack(distance_masks)
 

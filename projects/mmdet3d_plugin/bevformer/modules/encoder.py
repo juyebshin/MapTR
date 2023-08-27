@@ -63,15 +63,15 @@ class BEVFormerEncoder(TransformerLayerSequence):
 
         # reference points in 3D space, used in spatial cross-attention (SCA)
         if dim == '3d':
-            zs = torch.linspace(0.5, Z - 0.5, num_points_in_pillar, dtype=dtype,
+            zs = torch.linspace(0.5, Z - 0.5, num_points_in_pillar, dtype=dtype, # 0.5 1.5 2.5 3.5
                                 device=device).view(-1, 1, 1).expand(num_points_in_pillar, H, W) / Z
-            xs = torch.linspace(0.5, W - 0.5, W, dtype=dtype,
+            xs = torch.linspace(0.5, W - 0.5, W, dtype=dtype, # 0.5 1.5 ... 98.5 99.5
                                 device=device).view(1, 1, W).expand(num_points_in_pillar, H, W) / W
-            ys = torch.linspace(0.5, H - 0.5, H, dtype=dtype,
+            ys = torch.linspace(0.5, H - 0.5, H, dtype=dtype, # 0.5 1.5 ... 198.5 199.5
                                 device=device).view(1, H, 1).expand(num_points_in_pillar, H, W) / H
-            ref_3d = torch.stack((xs, ys, zs), -1)
-            ref_3d = ref_3d.permute(0, 3, 1, 2).flatten(2).permute(0, 2, 1)
-            ref_3d = ref_3d[None].repeat(bs, 1, 1, 1)
+            ref_3d = torch.stack((xs, ys, zs), -1) # Z H W 3
+            ref_3d = ref_3d.permute(0, 3, 1, 2).flatten(2).permute(0, 2, 1) # Z 3 H W -> Z 3 H*W -> Z H*W 3
+            ref_3d = ref_3d[None].repeat(bs, 1, 1, 1) # bs Z H*W 3
             return ref_3d
 
         # reference points on 2D bev plane, used in temporal self-attention (TSA).
@@ -91,6 +91,17 @@ class BEVFormerEncoder(TransformerLayerSequence):
     # This function must use fp32!!!
     @force_fp32(apply_to=('reference_points', 'img_metas'))
     def point_sampling(self, reference_points, pc_range,  img_metas):
+        """_summary_
+
+        Args:
+            reference_points (torch.Tensor): 3D points of BEV voxel
+                has shape [b Z H*W 3] last dim in xyz order
+            pc_range (List): Point cloud range [-X, -Y, -Z, X, Y, Z]
+            img_metas (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
 
         lidar2img = []
         for img_meta in img_metas:
@@ -127,8 +138,8 @@ class BEVFormerEncoder(TransformerLayerSequence):
         reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
             reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps)
 
-        reference_points_cam[..., 0] /= img_metas[0]['img_shape'][0][1]
-        reference_points_cam[..., 1] /= img_metas[0]['img_shape'][0][0]
+        reference_points_cam[..., 0] /= img_metas[0]['img_shape'][0][1] # ref / 800
+        reference_points_cam[..., 1] /= img_metas[0]['img_shape'][0][0] # ref / 480
 
         bev_mask = (bev_mask & (reference_points_cam[..., 1:2] > 0.0)
                     & (reference_points_cam[..., 1:2] < 1.0)

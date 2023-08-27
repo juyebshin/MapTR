@@ -53,24 +53,24 @@ def remove_borders(vertices, scores, border: int, height: int, width: int):
 
 def sample_dt(vertices, distance: Tensor, s: int = 8):
     """ Extract distance transform patches around vertices """
-    # vertices: # tuple of length (b c), [N, 2(row, col)] tensor, in (25, 50) cell
-    # distance: (b c) 200 400 tensor
+    # vertices: # tuple of length b, [N, 2(row, col)] tensor, in (50, 25) cell
+    # distance: b c 400 200 tensor
     # embedding, _ = distance.max(1, keepdim=False) # b, 200, 400
     embedding = distance # 0 ~ 10 -> 0 ~ 1 normalize
-    bc, h, w = embedding.shape # (b 3) 200 400
-    hc, wc = int(h/s), int(w/s) # 25, 50
-    embedding = embedding.reshape(bc, hc, s, wc, s).permute(0, 1, 3, 2, 4) # (b c) 25 8 50 8 -> (b c) 25 50 8 8
-    embedding = embedding.reshape(bc, hc, wc, s*s) # (b c) 25 50 64
-    # embedding = embedding.reshape(b, hc, wc, -1) # b, 25, 50, 192
-    embedding = [e[tuple(vc.t())] for e, vc in zip(embedding, vertices)] # tuple of length (b c), [N, 64] tensor
+    b, c, h, w = embedding.shape # b 3 400 200
+    hc, wc = int(h/s), int(w/s) # 50, 25
+    embedding = embedding.reshape(b, c, hc, s, wc, s).permute(0, 1, 2, 4, 3, 5).contiguous() # b c 50 8 25 8 -> b c 50 25 8 8
+    embedding = embedding.reshape(b, c, hc, wc, s*s).permute(0, 2, 3, 1, 4).contiguous() # b c 50 25 64 -> b 50 25 3 64
+    embedding = embedding.reshape(b, hc, wc, -1) # b, 50, 25, 192
+    embedding = [e[tuple(vc.t())] for e, vc in zip(embedding, vertices)] # tuple of length b, [N, 192] tensor
     return embedding
 
 def sample_feat(vertices, feature: Tensor):
     """ Extract feature patches around vertices """
     # vertices: # tuple of length (b c), [N, 2(row, col)] tensor, in (25, 50) cell
     # feature: (b c) 256 25 50 tensor
-    bc, c, h, w = feature.shape # (b c) 256 25 50
-    embedding = feature.permute(0, 2, 3, 1) # (b c) 25 50 256
+    b, c, h, w = feature.shape # b 256 50 25
+    embedding = feature.permute(0, 2, 3, 1).contiguous() # b 50 25 256
     embedding = [e[tuple(vc.t())] for e, vc in zip(embedding, vertices)] # tuple of length (b c), [N, 256] tensor
     return embedding
 
@@ -115,7 +115,7 @@ def attention(query, key, value, mask=None):
         mask = torch.einsum('bdn,bdm->bdnm', mask, mask) # [b, 1, N, N]
         scores = scores.masked_fill(mask == 0, -1e9)
     prob = torch.nn.functional.softmax(scores, dim=-1) # [b, 4, N, N]
-    return torch.einsum('bhnm,bdhm->bdhn', prob, value), prob # final message passing [b, 64, 4, N]
+    return torch.einsum('bhnm,bdhm->bdhn', prob, value) # final message passing [b, 64, 4, N]
 
 
 def log_sinkhorn_iterations(Z, log_mu, log_nu, iters: int):    
@@ -224,10 +224,10 @@ class MultiHeadedAttention(BaseModule):
         num_vertices = query.size(2) # N
         if mask is None:
             mask = torch.ones([batch_dim, 1, num_vertices], device=query.device) # [b, 1, N]
-        query, key, value = [l(x).view(batch_dim, self.dim, self.num_heads, -1)
+        query, key, value = [l(x).contiguous().view(batch_dim, self.dim, self.num_heads, -1)
                              for l, x in zip(self.proj, (query, key, value))]
         # q, k, v: [b, dim, head, N]
-        x, _ = attention(query, key, value, mask) # [b, 64, head, N], [b, head, N, N]
+        x = attention(query, key, value, mask) # [b, 64, head, N], [b, head, N, N]
         return self.merge(x.contiguous().view(batch_dim, self.dim*self.num_heads, -1))
 
 class AttentionalPropagation(BaseModule):
@@ -275,18 +275,29 @@ class GraphEncoder(BaseModule):
         """ vertices: [b, N, 3] vertices coordinates with score confidence (x y c)
             distance: [b, N, 64]
         """
-        input = embedding.transpose(1, 2) # [b, C, N] C = 3 for vertices, C = 64 for dt
+        input = embedding.transpose(1, 2).contiguous() # [b, C, N] C = 3 for vertices, C = 64 for dt
         return self.encoder(input) # [b, 256, N]
     
-def vectorize_graph(positions: torch.Tensor, match: torch.Tensor, mask: torch.Tensor, match_threshold=0.1):
+def onehot_encoding(logits, dim=0):
+    max_idx = torch.argmax(logits, dim, keepdim=True) # 1, ...
+    one_hot = logits.new_full(logits.shape, 0) # c, ...
+    one_hot.scatter_(dim, max_idx, 1) # c, ...
+    return one_hot
+
+def vectorize_graph(positions: torch.Tensor, 
+                    match: torch.Tensor, 
+                    semantics: torch.Tensor, 
+                    mask: torch.Tensor, 
+                    match_threshold=0.1):
     """ Vectorize from graph representations in CPU mode
 
     Args:
     ----------
     positions: torch.Tensor, match: torch.Tensor, mask: torch.Tensor
-    @ positions: c N 3
-    @ match: c N+1 N+1 
-    @ mask: c N 1 
+    @ positions: N 3
+    @ match: N+1 N+1 
+    @ semantics: 3 N
+    @ mask: N 1 
     @ patch_size: (30.0, 60.0)
 
     Returns:
@@ -294,42 +305,44 @@ def vectorize_graph(positions: torch.Tensor, match: torch.Tensor, mask: torch.Te
     confidences: [ins] list of float
     line_types: [ins] list of index
     """
-    assert match.shape[1] == match.shape[2], f"match.shape[1]: {match.shape[1]} != match.shape[2]: {match.shape[2]}"
-    assert positions.shape[1]  == mask.shape[1], f"Following shapes mismatch: positions.shape[1]({positions.shape[1]}), mask.shape[1]({mask.shape[1]}"
+    assert match.shape[0] == match.shape[1], f"match.shape[1]: {match.shape[0]} != match.shape[2]: {match.shape[1]}"
+    assert positions.shape[0] == semantics.shape[1] == mask.shape[0], \
+        f"Following shapes mismatch: positions.shape[0]({positions.shape[0]}), \
+            segmentation.shape[1]({semantics.shape[1]}), mask.shape[0]({mask.shape[0]}"
 
-    match = match.exp().cpu()
-    positions = positions.cpu().numpy()
-    mask = mask.squeeze(-1).cpu() # c N
-    bins = torch.ones([mask.shape[0]], device=mask.device).view(mask.shape[0], 1) # c 1
-    mask_bin = torch.cat([mask, bins], -1) # c N+1
+    mask = mask.squeeze(-1).cpu() # N
+    mask_bin = torch.cat([mask, mask.new_tensor(1).contiguous().view(1)], 0) # N+1
+    match = match.exp().cpu()[mask_bin == 1][:, mask_bin == 1] # M+1 M+1
+    positions = positions.cpu().numpy()[mask == 1] # M 3
 
     confidences = []
     line_types = []
     simplified_coords = []
-    for i, (cpositions, cmatch, cmask_bin) in enumerate(zip(positions, match, mask_bin)):
-        # cpositions: N 3
-        # cmatch: N+1 N+1
-        # cmask_bin: N+1
-        cpositions = cpositions[mask[i] == 1] # M 3
-        cmatch = cmatch[cmask_bin == 1][:, cmask_bin == 1] # M+1 M+1
-        if cmatch.shape[0] < 3:
-            continue
-        # adj_mat = torch.zeros_like(match[:-1]) # [M, M+1]
-        adj_mat = cmatch[:-1, :-1] > match_threshold # M M for > threshold
-        t2scores, t2indices = torch.topk(cmatch[:-1, :-1], 2, -1) # M 2; for top-2
-        t2mat = cmatch.new_full(cmatch[:-1, :-1].shape, 0, dtype=torch.bool)
-        t2mat = t2mat.scatter_(1, t2indices, 1) # M M
-        adj_mat = adj_mat & t2mat # M M
+    if match.shape[0] < 3:
+        return simplified_coords, torch.tensor(confidences), torch.tensor(line_types)
+    
+    adj_mat = match[:-1, :-1] > match_threshold # M M for > threshold
+    t2scores, t2indices = torch.topk(match[:-1, :-1], 2, -1) # M 2; for top-2
+    t2mat = match.new_full(match[:-1, :-1].shape, 0, dtype=torch.bool)
+    t2mat = t2mat.scatter_(1, t2indices, 1) # M M
+    adj_mat = adj_mat & t2mat # M M
+    semantics = F.softmax(semantics, 0)[:, mask == 1] # 3 M
+    semantics_oh = onehot_encoding(semantics).cpu().numpy() # 3 M
+    semantics = semantics.cpu().numpy()
+    
+    for i in range(semantics_oh.shape[0]): # 0, 1, 2
+        single_mask = np.expand_dims(semantics_oh[i].astype('uint8'), 1) # M 1
+        single_match_mask = single_mask @ single_mask.T # M M symmetric
 
-        single_class_adj_list = torch.nonzero(adj_mat).numpy() # M' 2; symmetric single_class_adj_list[:, 0] -> single_class_adj_list[:, 1]
+        single_class_adj_list = torch.nonzero(adj_mat & single_match_mask).numpy() # M' 2; symmetric single_class_adj_list[:, 0] -> single_class_adj_list[:, 1]
         if single_class_adj_list.shape[0] == 0:
             continue
         # single_class_adj_list = np.vstack([single_class_adj_list, np.flip(single_class_adj_list, 1)]) for top 1
         single_inst_adj_list = single_class_adj_list
-        single_class_adj_score = cmatch[single_class_adj_list[:, 0], single_class_adj_list[:, 1]].numpy() # [M'] confidence
+        single_class_adj_score = match[single_class_adj_list[:, 0], single_class_adj_list[:, 1]].numpy() # [M'] confidence
 
-        coords = cpositions[..., :-1] # M 2
-        prob = cpositions[..., -1] # M
+        coords = positions[..., :-1] # M 2
+        prob = semantics[i] # M
         # prob = prob[single_inst_adj_list[:, 0]] # [M,]
 
         while True:

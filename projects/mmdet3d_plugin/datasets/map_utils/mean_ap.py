@@ -158,7 +158,7 @@ def format_res_gt_by_classes(result_path,
     formatting_file = osp.join(output_dir,formatting_file)
 
     # for vis
-    if False:
+    if True:
         from PIL import Image
         import matplotlib.pyplot as plt
         from matplotlib import transforms
