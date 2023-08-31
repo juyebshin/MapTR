@@ -59,8 +59,8 @@ def sample_dt(vertices, distance: Tensor, s: int = 8):
     embedding = distance # 0 ~ 10 -> 0 ~ 1 normalize
     bc, h, w = embedding.shape # (b 3) 200 400
     hc, wc = int(h/s), int(w/s) # 25, 50
-    embedding = embedding.reshape(bc, hc, s, wc, s).permute(0, 1, 3, 2, 4) # (b c) 25 8 50 8 -> (b c) 25 50 8 8
-    embedding = embedding.reshape(bc, hc, wc, s*s) # (b c) 25 50 64
+    embedding = embedding.reshape(bc, hc, s, wc, s).permute(0, 1, 3, 2, 4).contiguous() # (b c) 25 8 50 8 -> (b c) 25 50 8 8
+    embedding = embedding.reshape(bc, hc, wc, s*s).contiguous() # (b c) 25 50 64
     # embedding = embedding.reshape(b, hc, wc, -1) # b, 25, 50, 192
     embedding = [e[tuple(vc.t())] for e, vc in zip(embedding, vertices)] # tuple of length (b c), [N, 64] tensor
     return embedding
@@ -70,7 +70,7 @@ def sample_feat(vertices, feature: Tensor):
     # vertices: # tuple of length (b c), [N, 2(row, col)] tensor, in (25, 50) cell
     # feature: (b c) 256 25 50 tensor
     bc, c, h, w = feature.shape # (b c) 256 25 50
-    embedding = feature.permute(0, 2, 3, 1) # (b c) 25 50 256
+    embedding = feature.permute(0, 2, 3, 1).contiguous() # (b c) 25 50 256
     embedding = [e[tuple(vc.t())] for e, vc in zip(embedding, vertices)] # tuple of length (b c), [N, 256] tensor
     return embedding
 
@@ -275,7 +275,7 @@ class GraphEncoder(BaseModule):
         """ vertices: [b, N, 3] vertices coordinates with score confidence (x y c)
             distance: [b, N, 64]
         """
-        input = embedding.transpose(1, 2) # [b, C, N] C = 3 for vertices, C = 64 for dt
+        input = embedding.transpose(1, 2).contiguous() # [b, C, N] C = 3 for vertices, C = 64 for dt
         return self.encoder(input) # [b, 256, N]
     
 def vectorize_graph(positions: torch.Tensor, match: torch.Tensor, mask: torch.Tensor, match_threshold=0.1):

@@ -173,7 +173,7 @@ class GraphLoss(BaseModule):
                         assert torch.max(match_gt_valid[:, :-1].sum(0)) == 1, f"maximum value of col-wise sum expected 1, but got: {torch.max(match_gt_valid[:, :-1].sum(0))}"
 
                         # add minibatch dimension and class first
-                        cmatch_valid = cmatch_valid.unsqueeze(0).transpose(1, 2) # 1 M+1 M+1 class dim first
+                        cmatch_valid = cmatch_valid.unsqueeze(0).transpose(1, 2).contiguous() # 1 M+1 M+1 class dim first
                         match_gt_valid = match_gt_valid.unsqueeze(0) # 1 M+1 M+1
 
                         # backward col -> row

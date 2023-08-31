@@ -156,6 +156,7 @@ class InstaGraMDecoder(BaseModule):
             kernel_size=1,
             bias=True)
         )
+        self.fp16_enabled = False
         
     def forward(self, 
                 bev_embed, # b, 256, 200, 100

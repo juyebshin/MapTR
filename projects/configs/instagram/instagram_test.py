@@ -228,7 +228,7 @@ model = dict(
             voxel_size=voxel_size,
             cdist_thr=1.5,
             reduction='mean',
-            loss_weight=dict(pts=0.5, match=0.001)), # 0.1, 0.005
+            loss_weight=dict(pts=0.5, match=0.0001)), # 0.1, 0.005
     ), # pts_bbox_head
     # model training and testing settings
     # train_cfg=dict(pts=dict(
