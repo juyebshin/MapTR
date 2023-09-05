@@ -28,7 +28,7 @@ def sample_pts_from_line(line,
                          padding=False,
                          num_samples=250,):
     if fixed_num < 0:
-        distances = np.arange(0, line.length+sample_dist, sample_dist) # line.length+sample_dist: includes endpoint
+        distances = np.arange(0, line.length, sample_dist) # line.length+sample_dist: includes endpoint
         sampled_points = np.array([list(line.interpolate(distance).coords) for distance in distances]).reshape(-1, 2)
     else:
         # fixed number of points, so distance is line.length / fixed_num

@@ -85,7 +85,7 @@ def parse_args():
         nargs='+',
         default=['fixed_num_pts',],
         help='vis format, default should be "points",'
-        'support ["se_pts","bbox","fixed_num_pts","polyline_pts","instagram"]')
+        'support ["se_pts","bbox","fixed_num_pts","polyline_pts","vector_pts"]')
     args = parser.parse_args()
     return args
 
@@ -338,7 +338,7 @@ def main():
                 gt_polyline_map_path = osp.join(sample_dir, 'GT_polyline_pts_MAP.png')
                 plt.savefig(gt_polyline_map_path, bbox_inches='tight', format='png',dpi=1200)
                 plt.close()           
-            elif vis_format == 'instagram':
+            elif vis_format == 'vector_pts':
                 map_dict = preprocess_map(dict(gt_labels_3d=gt_labels_3d[0], gt_bboxes_3d=gt_bboxes_3d[0]),
                                            pc_range,
                                            cfg.voxel_size,
@@ -364,21 +364,21 @@ def main():
                 gt_fixeddist_map_path = osp.join(sample_dir, 'GT_fixeddist_pts_MAP.png')
                 plt.savefig(gt_fixeddist_map_path, bbox_inches='tight', format='png',dpi=1200)
                 plt.close()    
-                dt = map_dict['distance_transform']
-                # vmin = np.min(dt)
-                # vmax = np.max(dt)
-                # dt = (dt - vmin) / (vmax-vmin)
-                dt_color_mask = cmap(dt.max(0))[..., :3] * 255 # 400, 200, 3
-                Image.fromarray(dt_color_mask.astype('uint8')).save(osp.join(sample_dir, 'GT_distance_transform_MAP.png'))
+                # dt = map_dict['distance_transform']
+                # # vmin = np.min(dt)
+                # # vmax = np.max(dt)
+                # # dt = (dt - vmin) / (vmax-vmin)
+                # dt_color_mask = cmap(dt.max(0))[..., :3] * 255 # 400, 200, 3
+                # Image.fromarray(dt_color_mask.astype('uint8')).save(osp.join(sample_dir, 'GT_distance_transform_MAP.png'))
                 
-                vt = map_dict['vertex_mask'] * 255 # 3, 64, 50, 25
-                C, _, Hc, Wc = vt.shape
-                vt = vt.transpose(0, 2, 3, 1) # 3, 50, 25, 64
-                vt = np.reshape(vt, [C, Hc, Wc, 8, 8]) # 3, 50, 25, 8, 8
-                vt = np.transpose(vt, [0, 1, 3, 2, 4]) # 3, 50, 8, 25, 8
-                vt = np.reshape(vt, [C, Hc*8, Wc*8]) # 3, 400, 200
-                vt_color_mask = cmap(vt.max(0))[..., :3] * 255 # 400, 200, 3
-                Image.fromarray(vt_color_mask.astype('uint8')).save(osp.join(sample_dir, 'GT_vertex_mask_MAP.png'))
+                # vt = map_dict['vertex_mask'] * 255 # 3, 64, 50, 25
+                # C, _, Hc, Wc = vt.shape
+                # vt = vt.transpose(0, 2, 3, 1) # 3, 50, 25, 64
+                # vt = np.reshape(vt, [C, Hc, Wc, 8, 8]) # 3, 50, 25, 8, 8
+                # vt = np.transpose(vt, [0, 1, 3, 2, 4]) # 3, 50, 8, 25, 8
+                # vt = np.reshape(vt, [C, Hc*8, Wc*8]) # 3, 400, 200
+                # vt_color_mask = cmap(vt.max(0))[..., :3] * 255 # 400, 200, 3
+                # Image.fromarray(vt_color_mask.astype('uint8')).save(osp.join(sample_dir, 'GT_vertex_mask_MAP.png'))
 
             else: 
                 logger.error(f'WRONG visformat for GT: {vis_format}')
