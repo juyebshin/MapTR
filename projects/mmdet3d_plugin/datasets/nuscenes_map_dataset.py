@@ -154,6 +154,37 @@ class LiDARInstanceLines(object):
         instance_points_tensor[:,:,0] = torch.clamp(instance_points_tensor[:,:,0], min=-self.max_x,max=self.max_x)
         instance_points_tensor[:,:,1] = torch.clamp(instance_points_tensor[:,:,1], min=-self.max_y,max=self.max_y)
         return instance_points_tensor
+    
+    @property
+    def fixed_distance_sampled_points(self):
+        """
+        return List(Dict{'pts': , 'num_pts': ,})) of length N
+            N means the num of instances
+            'pts': torch.Tensor([num_pts, 2]) in x, y
+            'num_pts': Int, number of points for instance
+        """
+        assert len(self.instance_list) != 0
+        assert self.sample_dist > 0
+        instance_vectors_list = []
+        for instance in self.instance_list:
+            distances = np.arange(0, instance.length, self.sample_dist)
+            sampled_points = np.array([list(instance.interpolate(distance).coords) for distance in distances]).reshape(-1, 2)
+            num_valid = len(sampled_points)
+            if self.padding:
+                if num_valid < self.num_samples:
+                    padding = np.zeros((self.num_samples - num_valid, 2))
+                    sampled_points = np.concatenate([sampled_points, padding], axis=0)
+                else:
+                    sampled_points = sampled_points[:self.num_samples, :]
+                    num_valid = self.num_samples
+            sampled_points_tensor = to_tensor(sampled_points)
+            # num_valid_tensor = to_tensor(num_valid)
+            instance_vectors_list.append({
+                'pts': sampled_points_tensor,
+                'num_pts': num_valid
+            })
+            
+        return instance_vectors_list
 
     @property
     def fixed_num_sampled_points_ambiguity(self):
@@ -495,6 +526,7 @@ class VectorizedLocalMap(object):
         'lane_divider': 0,
         'ped_crossing': 1,
         'contours': 2,
+        'stop_line': 3,
         'others': -1
     }
     def __init__(self,
@@ -504,6 +536,7 @@ class VectorizedLocalMap(object):
                  line_classes=['road_divider', 'lane_divider'],
                  ped_crossing_classes=['ped_crossing'],
                  contour_classes=['road_segment', 'lane'],
+                 stop_line_classes=['stop_line'],
                  sample_dist=1,
                  num_samples=250,
                  padding=False,
@@ -521,6 +554,7 @@ class VectorizedLocalMap(object):
         self.line_classes = line_classes
         self.ped_crossing_classes = ped_crossing_classes
         self.polygon_classes = contour_classes
+        self.stop_line_classes = stop_line_classes
         self.nusc_maps = {}
         self.map_explorer = {}
         for loc in self.MAPS:
@@ -562,6 +596,11 @@ class VectorizedLocalMap(object):
                 poly_bound_list = self.poly_geoms_to_instances(polygon_geom)
                 for contour in poly_bound_list:
                     vectors.append((contour, self.CLASS2LABEL.get('contours', -1)))
+            elif vec_class == 'stop_line':
+                stop_geom = self.get_map_geom(patch_box, patch_angle, self.stop_line_classes, location)
+                stop_instance_list = self.stop_poly_geoms_to_instances(stop_geom)
+                for instance in stop_instance_list:
+                    vectors.append((instance, self.CLASS2LABEL.get('stop_line', -1)))
             else:
                 raise ValueError(f'WRONG vec_class: {vec_class}')
 
@@ -596,6 +635,9 @@ class VectorizedLocalMap(object):
                 map_geom.append((layer_name, geoms))
             elif layer_name in self.ped_crossing_classes:
                 geoms = self.get_ped_crossing_line(patch_box, patch_angle, location)
+                map_geom.append((layer_name, geoms))
+            elif layer_name in self.stop_line_classes:
+                geoms = self.get_stop_line_line(patch_box, patch_angle, location)
                 map_geom.append((layer_name, geoms))
         return map_geom
 
@@ -708,6 +750,40 @@ class VectorizedLocalMap(object):
         max_x = self.patch_size[1] / 2
         max_y = self.patch_size[0] / 2
         local_patch = box(-max_x + 0.2, -max_y + 0.2, max_x - 0.2, max_y - 0.2)
+        exteriors = []
+        interiors = []
+        if union_segments.geom_type != 'MultiPolygon':
+            union_segments = MultiPolygon([union_segments])
+        for poly in union_segments.geoms:
+            exteriors.append(poly.exterior)
+            for inter in poly.interiors:
+                interiors.append(inter)
+
+        results = []
+        for ext in exteriors:
+            if ext.is_ccw:
+                ext.coords = list(ext.coords)[::-1]
+            lines = ext.intersection(local_patch)
+            if isinstance(lines, MultiLineString):
+                lines = ops.linemerge(lines)
+            results.append(lines)
+
+        for inter in interiors:
+            if not inter.is_ccw:
+                inter.coords = list(inter.coords)[::-1]
+            lines = inter.intersection(local_patch)
+            if isinstance(lines, MultiLineString):
+                lines = ops.linemerge(lines)
+            results.append(lines)
+
+        return self._one_type_line_geom_to_instances(results)
+
+    def stop_poly_geoms_to_instances(self, stop_geom):
+        stop = stop_geom[0][1]
+        union_segments = ops.unary_union(stop)
+        max_x = self.patch_size[1] / 2
+        max_y = self.patch_size[0] / 2
+        local_patch = box(-max_x - 0.2, -max_y - 0.2, max_x + 0.2, max_y + 0.2)
         exteriors = []
         interiors = []
         if union_segments.geom_type != 'MultiPolygon':
@@ -863,6 +939,30 @@ class VectorizedLocalMap(object):
                     if new_polygon.geom_type is 'Polygon':
                         new_polygon = MultiPolygon([new_polygon])
                     polygon_list.append(new_polygon)
+
+        return polygon_list
+    
+    def get_stop_line_line(self, patch_box, patch_angle, location):
+        patch_x = patch_box[0]
+        patch_y = patch_box[1]
+
+        patch = self.map_explorer[location].get_patch_coord(patch_box, patch_angle)
+        polygon_list = []
+        records = getattr(self.map_explorer[location].map_api, 'stop_line')
+        # records = getattr(self.nusc_maps[location], 'stop_line')
+        for record in records:
+            if record['stop_line_type'] in ['PED_CROSSING', 'TRAFFIC_LIGHT']:
+                polygon = self.map_explorer[location].map_api.extract_polygon(record['polygon_token'])
+                if polygon.is_valid:
+                    new_polygon = polygon.intersection(patch)
+                    if not new_polygon.is_empty:
+                        new_polygon = affinity.rotate(new_polygon, -patch_angle,
+                                                        origin=(patch_x, patch_y), use_radians=False)
+                        new_polygon = affinity.affine_transform(new_polygon,
+                                                                [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
+                        if new_polygon.geom_type is 'Polygon':
+                            new_polygon = MultiPolygon([new_polygon])
+                        polygon_list.append(new_polygon)
 
         return polygon_list
 
