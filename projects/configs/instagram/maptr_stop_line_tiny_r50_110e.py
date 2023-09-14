@@ -23,7 +23,7 @@ class_names = [
     'car', 'truck', 'construction_vehicle', 'bus', 'trailer', 'barrier',
     'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone'
 ]
-# map has classes: divider, ped_crossing, boundary, stop_line
+# map has classes: divider, ped_crossing, boundary
 map_classes = ['divider', 'ped_crossing','boundary', 'stop_line']
 # fixed_ptsnum_per_line = 20
 # map_classes = ['divider',]
@@ -50,7 +50,7 @@ bev_w_ = 100
 queue_length = 1 # each sequence contains `queue_length` frames.
 
 model = dict(
-    type='InstaGraM',
+    type='MapTR',
     use_grid_mask=True,
     video_test_mode=False,
     pretrained=dict(img='ckpts/resnet50-19c8e357.pth'),
@@ -72,7 +72,7 @@ model = dict(
         num_outs=_num_levels_,
         relu_before_extra_convs=True),
     pts_bbox_head=dict(
-        type='InstaGraMHead',
+        type='MapTRHead',
         bev_h=bev_h_,
         bev_w=bev_w_,
         num_query=900,
@@ -91,7 +91,7 @@ model = dict(
         code_size=2,
         code_weights=[1.0, 1.0, 1.0, 1.0],
         transformer=dict(
-            type='InstaGraMPerceptionTransformer',
+            type='MapTRPerceptionTransformer',
             rotate_prev_bev=True,
             use_shift=True,
             use_can_bus=True,
@@ -127,7 +127,7 @@ model = dict(
                     operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
                                      'ffn', 'norm'))),
             decoder=dict(
-                type='InstaGraMDecoder',
+                type='MapTRDecoder',
                 num_layers=6,
                 return_intermediate=True,
                 transformerlayers=dict(
@@ -149,7 +149,7 @@ model = dict(
                     operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
                                      'ffn', 'norm')))),
         bbox_coder=dict(
-            type='InstaGraMNMSFreeCoder',
+            type='MapTRNMSFreeCoder',
             # post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
             post_center_range=[-20, -35, -20, -35, 20, 35, 20, 35],
             pc_range=point_cloud_range,
@@ -229,7 +229,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=1, # 4
+    samples_per_gpu=4,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
@@ -293,7 +293,7 @@ lr_config = dict(
     warmup_iters=500,
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3)
-total_epochs = 24
+total_epochs = 110
 # total_epochs = 50
 # evaluation = dict(interval=1, pipeline=test_pipeline)
 evaluation = dict(interval=2, pipeline=test_pipeline, metric='chamfer')
@@ -307,4 +307,4 @@ log_config = dict(
         dict(type='TensorboardLoggerHook')
     ])
 fp16 = dict(loss_scale=512.)
-checkpoint_config = dict(interval=1)
+checkpoint_config = dict(interval=5)

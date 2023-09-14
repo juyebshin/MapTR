@@ -19,7 +19,7 @@ from .nuscenes_dataset import CustomNuScenesDataset
 from nuscenes.map_expansion.map_api import NuScenesMap, NuScenesMapExplorer
 from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
 from shapely import affinity, ops
-from shapely.geometry import LineString, box, MultiPolygon, MultiLineString
+from shapely.geometry import LineString, box, MultiPolygon, MultiLineString, Point, MultiPoint
 from mmdet.datasets.pipelines import to_tensor
 import json
 
@@ -598,7 +598,7 @@ class VectorizedLocalMap(object):
                     vectors.append((contour, self.CLASS2LABEL.get('contours', -1)))
             elif vec_class == 'stop_line':
                 stop_geom = self.get_map_geom(patch_box, patch_angle, self.stop_line_classes, location)
-                stop_instance_list = self.stop_poly_geoms_to_instances(stop_geom)
+                stop_instance_list = self.line_geoms_to_instances(stop_geom)['stop_line']
                 for instance in stop_instance_list:
                     vectors.append((instance, self.CLASS2LABEL.get('stop_line', -1)))
             else:
@@ -870,7 +870,7 @@ class VectorizedLocalMap(object):
                                                       origin=(patch_x, patch_y), use_radians=False)
                         new_polygon = affinity.affine_transform(new_polygon,
                                                                 [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
-                        if new_polygon.geom_type is 'Polygon':
+                        if new_polygon.geom_type == 'Polygon':
                             new_polygon = MultiPolygon([new_polygon])
                         polygon_list.append(new_polygon)
 
@@ -885,7 +885,7 @@ class VectorizedLocalMap(object):
                                                       origin=(patch_x, patch_y), use_radians=False)
                         new_polygon = affinity.affine_transform(new_polygon,
                                                                 [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
-                        if new_polygon.geom_type is 'Polygon':
+                        if new_polygon.geom_type == 'Polygon':
                             new_polygon = MultiPolygon([new_polygon])
                         polygon_list.append(new_polygon)
 
@@ -895,7 +895,7 @@ class VectorizedLocalMap(object):
         if layer_name not in self.map_explorer[location].map_api.non_geometric_line_layers:
             raise ValueError("{} is not a line layer".format(layer_name))
 
-        if layer_name is 'traffic_light':
+        if layer_name == 'traffic_light':
             return None
 
         patch_x = patch_box[0]
@@ -936,35 +936,104 @@ class VectorizedLocalMap(object):
                                                       origin=(patch_x, patch_y), use_radians=False)
                     new_polygon = affinity.affine_transform(new_polygon,
                                                             [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
-                    if new_polygon.geom_type is 'Polygon':
+                    if new_polygon.geom_type == 'Polygon':
                         new_polygon = MultiPolygon([new_polygon])
                     polygon_list.append(new_polygon)
 
         return polygon_list
     
     def get_stop_line_line(self, patch_box, patch_angle, location):
+        def add_line(poly_xy, idx, line_list, patch=None, patch_angle=None, patch_x=None, patch_y=None):
+            points = [(p0, p1) for p0, p1 in zip(poly_xy[0, idx:idx + 2], poly_xy[1, idx:idx + 2])]
+            line = LineString(points)
+            if patch is not None:
+                line = line.intersection(patch)
+                if not line.is_empty:
+                    line = affinity.rotate(line, -patch_angle, origin=(patch_x, patch_y), use_radians=False)
+                    line = affinity.affine_transform(line, [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
+            line_list.append(line)
+                
         patch_x = patch_box[0]
         patch_y = patch_box[1]
+        
+        divider_geoms = self.get_divider_line(patch_box, patch_angle, 'lane_divider', location)
 
         patch = self.map_explorer[location].get_patch_coord(patch_box, patch_angle)
-        polygon_list = []
+        line_list = []
         records = getattr(self.map_explorer[location].map_api, 'stop_line')
         # records = getattr(self.nusc_maps[location], 'stop_line')
         for record in records:
-            if record['stop_line_type'] in ['PED_CROSSING', 'TRAFFIC_LIGHT']:
+            stop_line_type = record['stop_line_type']
+            if stop_line_type in ['PED_CROSSING', 'TRAFFIC_LIGHT']:
                 polygon = self.map_explorer[location].map_api.extract_polygon(record['polygon_token'])
                 if polygon.is_valid:
                     new_polygon = polygon.intersection(patch)
                     if not new_polygon.is_empty:
-                        new_polygon = affinity.rotate(new_polygon, -patch_angle,
-                                                        origin=(patch_x, patch_y), use_radians=False)
-                        new_polygon = affinity.affine_transform(new_polygon,
-                                                                [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
-                        if new_polygon.geom_type is 'Polygon':
-                            new_polygon = MultiPolygon([new_polygon])
-                        polygon_list.append(new_polygon)
+                        if stop_line_type == 'TRAFFIC_LIGHT':
+                            # stop_line in local coordinate
+                            new_polygon = affinity.rotate(new_polygon, -patch_angle,
+                                                            origin=(patch_x, patch_y), use_radians=False)
+                            new_polygon = affinity.affine_transform(new_polygon,
+                                                                    [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
+                            # if new_polygon.geom_type == 'Polygon':
+                            #     new_polygon = MultiPolygon([new_polygon])
+                            # polygon_list.append(new_polygon)
+                            poly_xy = np.array(new_polygon.exterior.xy) # [2, N]
+                            
+                            line_tmp = []
+                            for x in range(poly_xy.shape[1]-1):
+                                add_line(poly_xy, x, line_tmp)
+                                
+                            intersects = [i for i, geom in enumerate(divider_geoms) if new_polygon.intersects(geom)]
+                            if len(intersects):
+                                divider_geom_inter = divider_geoms[intersects[0]]
+                                divider_se_points = []
+                                if divider_geom_inter.geom_type == 'MultiLineString':
+                                    divider_geom_inter = divider_geom_inter.geoms[0]
+                                divider_se_points.append(Point(divider_geom_inter.coords[0]))
+                                divider_se_points.append(Point(divider_geom_inter.coords[-1]))
+                                
+                                dist_map = []
+                                for point in divider_se_points:
+                                    for line in line_tmp:
+                                        dist_map.append(point.distance(line))                                
+                                min_index = dist_map.index(min(dist_map))                                
+                                line_list.append(line_tmp[min_index % len(line_tmp)])
+                        elif stop_line_type == 'PED_CROSSING':
+                            # this part is executed only when 'polygon' intersects 'patch'
+                            # stop_line in global coordinate
+                            poly_xy = np.array(polygon.exterior.xy) # [2, N]                            
+                            line_tmp = []
+                            for x in range(poly_xy.shape[1]-1):
+                                add_line(poly_xy, x, line_tmp)
+                                
+                            ped_records = record['cue']
+                            if len(ped_records):
+                                ped_record = ped_records[0]
+                                ped_polygon = self.map_explorer[location].map_api.extract_polygon(ped_record['polygon_token'])
+                                if ped_polygon.is_valid:   
+                                    ped_lines = []                              
+                                    ped_poly_xy = np.array(ped_polygon.exterior.xy) # [2, N]
+                                    dist = np.square(ped_poly_xy[:, 1:] - ped_poly_xy[:, :-1]).sum(0)
+                                    x1, x2 = np.argsort(dist)[-2:]
 
-        return polygon_list
+                                    add_line(ped_poly_xy, x1, ped_lines)
+                                    add_line(ped_poly_xy, x2, ped_lines)
+                                    dist_map = []
+                                    for ped_line in ped_lines:
+                                        for line in line_tmp:
+                                            dist_map.append(ped_line.distance(line))
+                                    min_index = dist_map.index(min(dist_map))
+                                    line_list.append(line_tmp[min_index % len(line_tmp)])
+                                    new_line = line_tmp[min_index % len(line_tmp)].intersection(patch)
+                                    if not new_line.is_empty:
+                                        new_line = affinity.rotate(new_line, -patch_angle,
+                                                                   origin=(patch_x, patch_y), use_radians=False)
+                                        new_line = affinity.affine_transform(new_line,
+                                                                                [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
+                                        line_list.append(new_line)
+
+        return line_list
 
     def sample_pts_from_line(self, line):
         if self.fixed_num < 0:
