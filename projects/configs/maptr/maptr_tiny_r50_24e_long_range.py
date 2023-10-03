@@ -11,7 +11,7 @@ plugin_dir = 'projects/mmdet3d_plugin/'
 # point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 # point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
 point_cloud_range = [-50.0, -50.0, -2.0, 50.0, 50.0, 2.0]
-voxel_size = [0.5, 0.5, 4]
+voxel_size = [0.25, 0.25, 4]
 
 
 
@@ -46,8 +46,8 @@ _ffn_dim_ = _dim_*2
 _num_levels_ = 1
 # bev_h_ = 50
 # bev_w_ = 50
-bev_h_ = 100
-bev_w_ = 100
+bev_h_ = 200
+bev_w_ = 200
 queue_length = 1 # each sequence contains `queue_length` frames.
 
 model = dict(
@@ -152,7 +152,8 @@ model = dict(
         bbox_coder=dict(
             type='MapTRNMSFreeCoder',
             # post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
-            post_center_range=[-20, -35, -20, -35, 20, 35, 20, 35],
+            # post_center_range=[-20, -35, -20, -35, 20, 35, 20, 35],
+            post_center_range=[-55, -55, -55, -55, 55, 55, 55, 55],
             pc_range=point_cloud_range,
             max_num=50,
             voxel_size=voxel_size,
@@ -254,7 +255,7 @@ data = dict(
     val=dict(type=dataset_type,
              data_root=data_root,
              ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
-             map_ann_file=data_root + 'nuscenes_map_anns_val.json',
+             map_ann_file=data_root + 'nuscenes_map_vector_anns_long_range_val.json',
              pipeline=test_pipeline,  bev_size=(bev_h_, bev_w_),
              pc_range=point_cloud_range,
              fixed_ptsnum_per_line=fixed_ptsnum_per_gt_line,
@@ -265,7 +266,7 @@ data = dict(
     test=dict(type=dataset_type,
               data_root=data_root,
               ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
-              map_ann_file=data_root + 'nuscenes_map_anns_val.json',
+              map_ann_file=data_root + 'nuscenes_map_vector_anns_long_range_val.json',
               pipeline=test_pipeline, bev_size=(bev_h_, bev_w_),
               pc_range=point_cloud_range,
               fixed_ptsnum_per_line=fixed_ptsnum_per_gt_line,
@@ -308,4 +309,4 @@ log_config = dict(
         dict(type='TensorboardLoggerHook')
     ])
 fp16 = dict(loss_scale=512.)
-checkpoint_config = dict(interval=1)
+checkpoint_config = dict(interval=2)

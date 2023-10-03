@@ -202,7 +202,7 @@ def main():
     car_img = Image.open('./figs/lidar_car.png')
 
     # get color map: divider->r, ped->b, boundary->g
-    colors_plt = ['orange', 'b', 'g']
+    colors_plt = ['tab:red', 'tab:blue', 'tab:green']
 
 
     logger.info('BEGIN vis test dataset samples gt label & pred')
@@ -293,7 +293,7 @@ def main():
                     # plt.Rectangle(xy, width, height,color=colors_plt[gt_label_3d])
                 # continue
             elif vis_format == 'fixed_num_pts':
-                plt.figure(figsize=(2, 4))
+                plt.figure()
                 plt.xlim(pc_range[0], pc_range[3])
                 plt.ylim(pc_range[1], pc_range[4])
                 plt.axis('off')
@@ -317,7 +317,7 @@ def main():
                 plt.savefig(gt_fixedpts_map_path, bbox_inches='tight', format='png',dpi=1200)
                 plt.close()   
             elif vis_format == 'polyline_pts':
-                plt.figure(figsize=(2, 4))
+                plt.figure()
                 plt.xlim(pc_range[0], pc_range[3])
                 plt.ylim(pc_range[1], pc_range[4])
                 plt.axis('off')
@@ -352,7 +352,7 @@ def main():
         pts_3d = result_dic['pts_3d']
         keep = scores_3d > args.score_thresh
 
-        plt.figure(figsize=(2, 4))
+        plt.figure()
         plt.xlim(pc_range[0], pc_range[3])
         plt.ylim(pc_range[1], pc_range[4])
         plt.axis('off')
@@ -361,8 +361,8 @@ def main():
             pred_pts_3d = pred_pts_3d.numpy()
             pts_x = pred_pts_3d[:,0]
             pts_y = pred_pts_3d[:,1]
-            plt.plot(pts_x, pts_y, color=colors_plt[pred_label_3d],linewidth=1,alpha=0.8,zorder=-1)
-            plt.scatter(pts_x, pts_y, color=colors_plt[pred_label_3d],s=1,alpha=0.8,zorder=-1)
+            plt.plot(pts_x, pts_y, color=colors_plt[pred_label_3d],linewidth=2.0,alpha=0.8,zorder=-1)
+            plt.scatter(pts_x, pts_y, color=colors_plt[pred_label_3d],s=1.5,alpha=0.8,zorder=-1)
 
 
             pred_bbox_3d = pred_bbox_3d.numpy()
@@ -378,7 +378,7 @@ def main():
         plt.imshow(car_img, extent=[-1.2, 1.2, -1.5, 1.5])
 
         map_path = osp.join(sample_dir, 'PRED_MAP_plot.png')
-        plt.savefig(map_path, bbox_inches='tight', format='png',dpi=1200)
+        plt.savefig(map_path, bbox_inches='tight', pad_inches=0, format='png',dpi=1200)
         plt.close()
 
         
