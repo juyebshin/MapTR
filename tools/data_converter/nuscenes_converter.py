@@ -255,7 +255,7 @@ def _fill_trainval_infos(nusc,
             cam_token = sample['data'][cam]
             cam_path, _, cam_intrinsic = nusc.get_sample_data(cam_token)
             cam_info = obtain_sensor2top(nusc, cam_token, l2e_t, l2e_r_mat,
-                                         e2g_t, e2g_r_mat, cam)
+                                         e2g_t, e2g_r_mat, cam) # extrinsic to LiDAR
             cam_info.update(cam_intrinsic=cam_intrinsic)
             info['cams'].update({cam: cam_info})
 

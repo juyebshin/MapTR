@@ -998,8 +998,8 @@ class CustomNuScenesLocalMapDataset(CustomNuScenesDataset):
         self.MAPCLASSES = self.get_map_classes(map_classes)
         self.NUM_MAPCLASSES = len(self.MAPCLASSES)
         self.pc_range = pc_range
-        patch_h = pc_range[4]-pc_range[1]
-        patch_w = pc_range[3]-pc_range[0]
+        patch_h = pc_range[4]-pc_range[1] # 60
+        patch_w = pc_range[3]-pc_range[0] # 30
         self.patch_size = (patch_h, patch_w)
         self.padding_value = padding_value
         self.fixed_num = fixed_ptsnum_per_line
@@ -1066,6 +1066,7 @@ class CustomNuScenesLocalMapDataset(CustomNuScenesDataset):
         location = input_dict['map_location']
         ego2global_translation = input_dict['ego2global_translation']
         ego2global_rotation = input_dict['ego2global_rotation']
+        # annotations are projected to local LiDAR coordinate
         anns_results = self.vector_map.gen_vectorized_samples(location, lidar2global_translation, lidar2global_rotation)
         
         '''

@@ -1,5 +1,5 @@
 from .transform_3d import (
-    PadMultiViewImage, NormalizeMultiviewImage, 
+    PadMultiViewImage, NormalizeMultiviewImage, ResizeMultiViewImages,
     PhotoMetricDistortionMultiViewImage, CustomCollect3D, RandomScaleImageMultiViewImage, CustomPointsRangeFilter)
 from .formating import CustomDefaultFormatBundle3D
 
