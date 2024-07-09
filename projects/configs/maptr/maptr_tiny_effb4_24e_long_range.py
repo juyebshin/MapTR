@@ -9,7 +9,8 @@ plugin_dir = 'projects/mmdet3d_plugin/'
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
 # point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
-point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
+# point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
+point_cloud_range = [-50.0, -50.0, -2.0, 50.0, 50.0, 2.0]
 voxel_size = [0.15, 0.15, 4]
 
 
@@ -27,8 +28,8 @@ class_names = [
 map_classes = ['divider', 'ped_crossing','boundary']
 # fixed_ptsnum_per_line = 20
 # map_classes = ['divider',]
-fixed_ptsnum_per_gt_line = 20 # now only support fixed_pts > 0
-fixed_ptsnum_per_pred_line = 20
+fixed_ptsnum_per_gt_line = 40 # now only support fixed_pts > 0
+fixed_ptsnum_per_pred_line = 40
 eval_use_same_gt_sample_num_flag=True
 num_map_classes = len(map_classes)
 
@@ -45,27 +46,38 @@ _ffn_dim_ = _dim_*2
 _num_levels_ = 1
 # bev_h_ = 50
 # bev_w_ = 50
-bev_h_ = 80
-bev_w_ = 40
+bev_h_ = 200
+bev_w_ = 200
 queue_length = 1 # each sequence contains `queue_length` frames.
+
+checkpoint = 'ckpts/efficientnet-b4_3rdparty_8xb32-aa_in1k_20220119-45b8bd2b.pth'
 
 model = dict(
     type='MapTR',
     use_grid_mask=True,
     video_test_mode=False,
-    pretrained=dict(img='ckpts/resnet18-f37072fd.pth'),
+    # pretrained=dict(img=checkpoint),
+    # pretrained=dict(img='ckpts/resnet50-19c8e357.pth'),
+    # img_backbone=dict(
+    #     type='ResNet',
+    #     depth=50,
+    #     num_stages=4,
+    #     out_indices=(3,),
+    #     frozen_stages=1,
+    #     norm_cfg=dict(type='BN', requires_grad=False),
+    #     norm_eval=True,
+    #     style='pytorch'),
     img_backbone=dict(
-        type='ResNet',
-        depth=18,
-        num_stages=4,
-        out_indices=(3,),
-        frozen_stages=-1,
-        norm_cfg=dict(type='SyncBN', requires_grad=True),
-        norm_eval=False,
-        style='pytorch'),
+        type='EfficientNet',
+        arch='b4',
+        out_indices=(5,), # 448
+        drop_path_rate=0.2,
+        init_cfg=dict(
+            type='Pretrained', prefix='backbone', checkpoint=checkpoint)
+        ),
     img_neck=dict(
         type='FPN',
-        in_channels=[512],
+        in_channels=[448], # R50: 2048
         out_channels=_dim_,
         start_level=0,
         add_extra_convs='on_output',
@@ -76,7 +88,7 @@ model = dict(
         bev_h=bev_h_,
         bev_w=bev_w_,
         num_query=900,
-        num_vec=100,
+        num_vec=50,
         num_pts_per_vec=fixed_ptsnum_per_pred_line, # one bbox
         num_pts_per_gt_vec=fixed_ptsnum_per_gt_line,
         dir_interval=1,
@@ -118,8 +130,7 @@ model = dict(
                                 num_heads=4,
                                 dilation=1,
                                 kernel_size=(3,5),
-                                num_levels=_num_levels_,
-                                im2col_step=192),
+                                num_levels=_num_levels_),
                             embed_dims=_dim_,
                         )
                     ],
@@ -129,7 +140,7 @@ model = dict(
                                      'ffn', 'norm'))),
             decoder=dict(
                 type='MapTRDecoder',
-                num_layers=2,
+                num_layers=6,
                 return_intermediate=True,
                 transformerlayers=dict(
                     type='DetrTransformerDecoderLayer',
@@ -137,13 +148,12 @@ model = dict(
                         dict(
                             type='MultiheadAttention',
                             embed_dims=_dim_,
-                            num_heads=4,
+                            num_heads=8,
                             dropout=0.1),
                          dict(
                             type='CustomMSDeformableAttention',
                             embed_dims=_dim_,
-                            num_levels=1,
-                            im2col_step=192),
+                            num_levels=1),
                     ],
 
                     feedforward_channels=_ffn_dim_,
@@ -204,7 +214,7 @@ train_pipeline = [
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-    dict(type='RandomScaleImageMultiViewImage', scales=[0.2]),
+    dict(type='RandomScaleImageMultiViewImage', scales=[0.5]),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(type='CustomCollect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img'])
@@ -220,7 +230,7 @@ test_pipeline = [
         pts_scale_ratio=1,
         flip=False,
         transforms=[
-            dict(type='RandomScaleImageMultiViewImage', scales=[0.2]),
+            dict(type='RandomScaleImageMultiViewImage', scales=[0.5]),
             dict(type='PadMultiViewImage', size_divisor=32),
             dict(
                 type='DefaultFormatBundle3D',
@@ -231,7 +241,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=24,
+    samples_per_gpu=2,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
@@ -255,7 +265,7 @@ data = dict(
     val=dict(type=dataset_type,
              data_root=data_root,
              ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
-             map_ann_file=data_root + 'nuscenes_map_vector_anns_val.json',
+             map_ann_file=data_root + 'nuscenes_map_vector_anns_long_range_val.json',
              pipeline=test_pipeline,  bev_size=(bev_h_, bev_w_),
              pc_range=point_cloud_range,
              fixed_ptsnum_per_line=fixed_ptsnum_per_gt_line,
@@ -266,7 +276,7 @@ data = dict(
     test=dict(type=dataset_type,
               data_root=data_root,
               ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
-              map_ann_file=data_root + 'nuscenes_map_vector_anns_val.json',
+              map_ann_file=data_root + 'nuscenes_map_vector_anns_long_range_val.json',
               pipeline=test_pipeline, bev_size=(bev_h_, bev_w_),
               pc_range=point_cloud_range,
               fixed_ptsnum_per_line=fixed_ptsnum_per_gt_line,
@@ -280,14 +290,14 @@ data = dict(
 
 optimizer = dict(
     type='AdamW',
-    lr=4e-3,
+    lr=6e-4,
     paramwise_cfg=dict(
         custom_keys={
             'img_backbone': dict(lr_mult=0.1),
         }),
     weight_decay=0.01)
 
-optimizer_config = dict(grad_clip=dict(max_norm=50, norm_type=2))
+optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',
@@ -295,7 +305,7 @@ lr_config = dict(
     warmup_iters=500,
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3)
-total_epochs = 110
+total_epochs = 24
 # total_epochs = 50
 # evaluation = dict(interval=1, pipeline=test_pipeline)
 evaluation = dict(interval=2, pipeline=test_pipeline, metric='chamfer')
@@ -309,4 +319,4 @@ log_config = dict(
         dict(type='TensorboardLoggerHook')
     ])
 fp16 = dict(loss_scale=512.)
-checkpoint_config = dict(interval=5)
+checkpoint_config = dict(interval=1)
