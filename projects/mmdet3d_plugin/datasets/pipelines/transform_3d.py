@@ -388,6 +388,68 @@ class RandomScaleImageMultiViewImage(object):
         return repr_str
 
 
+@PIPELINES.register_module(force=True)
+class ResizeMultiViewImages(object):
+    """Resize mulit-view images and change intrinsics
+    If set `change_intrinsics=True`, key 'cam_intrinsics' and 'ego2img' will be changed
+
+    Args:
+        size (tuple, optional): resize target size, (h, w).
+        change_intrinsics (bool): whether to update intrinsics.
+    """
+    def __init__(self, size=None, scale=None, change_intrinsics=True):
+        self.size = size
+        self.scale = scale
+        assert size is None or scale is None
+        self.change_intrinsics = change_intrinsics
+
+    def __call__(self, results:dict):
+
+        new_imgs, post_lidar2imgs = [], []
+
+        for img,  lidar2img in zip(results['img'], \
+                results['lidar2img']):
+            if self.scale is not None:
+                h, w = img.shape[:2]
+                target_h = int(h * self.scale)
+                target_w = int(w * self.scale)
+            else:
+                target_h = self.size[0]
+                target_w = self.size[1]
+            
+            tmp, scaleW, scaleH = mmcv.imresize(img,
+                                                # NOTE: mmcv.imresize expect (w, h) shape
+                                                (target_w, target_h),
+                                                return_scale=True)
+            new_imgs.append(tmp)
+
+            rot_resize_matrix = np.array([
+                [scaleW, 0,      0,    0],
+                [0,      scaleH, 0,    0],
+                [0,      0,      1,    0],
+                [0,      0,      0,    1]])
+            post_lidar2img = rot_resize_matrix @ lidar2img
+            post_lidar2imgs.append(post_lidar2img)
+
+        results['img'] = new_imgs
+        results['img_shape'] = [img.shape for img in new_imgs]
+        results['ori_shape'] = [img.shape for img in new_imgs]
+        results['img_aug_matrix'] = [rot_resize_matrix for _ in results['lidar2img']]
+        if self.change_intrinsics:
+            results.update({
+                'lidar2img': post_lidar2imgs,
+            })
+
+        return results
+    
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(size={self.size}, '
+        repr_str += f'change_intrinsics={self.change_intrinsics})'
+
+        return repr_str
+
+
 @PIPELINES.register_module()
 class CustomPointsRangeFilter:
     """Filter points by the range.

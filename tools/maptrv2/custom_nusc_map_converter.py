@@ -426,7 +426,7 @@ class VectorizedLocalMap(object):
                         # vectors.append((instance, self.CLASS2LABEL.get(line_type, -1)))
             elif vec_class == 'ped_crossing':
                 ped_geom = self.get_map_geom(patch_box, patch_angle, self.ped_crossing_classes)
-                ped_instance_list = self.ped_poly_geoms_to_instances(ped_geom)
+                ped_instance_list = self.line_geoms_to_instances(ped_geom)['ped_crossing']
                 for instance in ped_instance_list:
                     # vectors.append((instance, self.CLASS2LABEL.get('ped_crossing', -1)))
                     map_dict[vec_class].append(np.array(instance.coords))
@@ -470,7 +470,7 @@ class VectorizedLocalMap(object):
                 # map_geom.append((layer_name, geoms))
                 map_geom[layer_name] = geoms
             elif layer_name in self.ped_crossing_classes:
-                geoms = self.get_ped_crossing_line(patch_box, patch_angle)
+                geoms = self.get_ped_crossing_vector_line(patch_box, patch_angle)
                 # map_geom.append((layer_name, geoms))
                 map_geom[layer_name] = geoms
         return map_geom
@@ -570,6 +570,33 @@ class VectorizedLocalMap(object):
                     polygon_list.append(new_polygon)
 
         return polygon_list
+    
+    def get_ped_crossing_vector_line(self, patch_box, patch_angle):
+        def add_line(poly_xy, idx, patch, patch_angle, patch_x, patch_y, line_list):
+            points = [(p0, p1) for p0, p1 in zip(poly_xy[0, idx:idx + 2], poly_xy[1, idx:idx + 2])]
+            line = LineString(points)
+            line = line.intersection(patch)
+            if not line.is_empty:
+                line = affinity.rotate(line, -patch_angle, origin=(patch_x, patch_y), use_radians=False)
+                line = affinity.affine_transform(line, [1.0, 0.0, 0.0, 1.0, -patch_x, -patch_y])
+                line_list.append(line)
+
+        patch_x = patch_box[0]
+        patch_y = patch_box[1]
+
+        patch = self.map_explorer.get_patch_coord(patch_box, patch_angle)
+        line_list = []
+        records = getattr(self.map_explorer.map_api, 'ped_crossing')
+        for record in records:
+            polygon = self.map_explorer.map_api.extract_polygon(record['polygon_token'])
+            poly_xy = np.array(polygon.exterior.xy)
+            dist = np.square(poly_xy[:, 1:] - poly_xy[:, :-1]).sum(0)
+            x1, x2 = np.argsort(dist)[-2:]
+
+            add_line(poly_xy, x1, patch, patch_angle, patch_x, patch_y, line_list)
+            add_line(poly_xy, x2, patch, patch_angle, patch_x, patch_y, line_list)
+
+        return line_list
 
     def line_geoms_to_instances(self, line_geom):
         line_instances_dict = dict()
@@ -830,18 +857,18 @@ def create_nuscenes_infos(root_path,
         print('test sample: {}'.format(len(train_nusc_infos)))
         data = dict(infos=train_nusc_infos, metadata=metadata)
         info_path = osp.join(out_path,
-                             '{}_map_infos_temporal_test.pkl'.format(info_prefix))
+                             '{}_map_infos_temporal_test_v2.pkl'.format(info_prefix))
         mmcv.dump(data, info_path)
     else:
         print('train sample: {}, val sample: {}'.format(
             len(train_nusc_infos), len(val_nusc_infos)))
         data = dict(infos=train_nusc_infos, metadata=metadata)
         info_path = osp.join(out_path,
-                             '{}_map_infos_temporal_train.pkl'.format(info_prefix))
+                             '{}_map_infos_temporal_train_v2.pkl'.format(info_prefix))
         mmcv.dump(data, info_path)
         data['infos'] = val_nusc_infos
         info_val_path = osp.join(out_path,
-                                 '{}_map_infos_temporal_val.pkl'.format(info_prefix))
+                                 '{}_map_infos_temporal_val_v2.pkl'.format(info_prefix))
         mmcv.dump(data, info_val_path)
 
 
