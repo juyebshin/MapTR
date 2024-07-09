@@ -271,7 +271,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=3, # 4
+    samples_per_gpu=2, # 4
     workers_per_gpu=4, # TODO
     train=dict(
         type=dataset_type,
