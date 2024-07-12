@@ -354,6 +354,6 @@ log_config = dict(
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
     ])
-fp16 = dict(loss_scale=512.)
+# fp16 = dict(loss_scale=512.)
 checkpoint_config = dict(max_keep_ckpts=1, interval=2)
 find_unused_parameters=True

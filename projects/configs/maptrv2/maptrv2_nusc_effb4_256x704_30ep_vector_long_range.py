@@ -9,15 +9,15 @@ plugin_dir = 'projects/mmdet3d_plugin/'
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
 # point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
-point_cloud_range = [-15.0, -30.0,-10.0, 15.0, 30.0, 10.0]
+point_cloud_range = [-50.0, -50.0,-10.0, 50.0, 50.0, 10.0]
 voxel_size = [0.15, 0.15, 20.0]
-dbound=[1.0, 35.0, 0.5]
+dbound=[1.0, 58.0, 1.0]
 
 grid_config = {
-    'x': [-30.0, -30.0, 0.15], # useless
-    'y': [-15.0, -15.0, 0.15], # useless
+    'x': [-50.0, -50.0, 0.15], # useless
+    'y': [-50.0, -50.0, 0.15], # useless
     'z': [-10, 10, 20],        # useless
-    'depth': [1.0, 35.0, 0.5], # useful
+    'depth': [1.0, 58.0, 1.0], # useful
 }
 
 img_h = 256
@@ -57,7 +57,7 @@ _num_levels_ = 1
 # bev_h_ = 50
 # bev_w_ = 50
 bev_h_ = 200
-bev_w_ = 100
+bev_w_ = 200
 queue_length = 1 # each sequence contains `queue_length` frames.
 
 aux_seg_cfg = dict(
@@ -174,7 +174,8 @@ model = dict(
         bbox_coder=dict(
             type='MapTRNMSFreeCoder',
             # post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
-            post_center_range=[-20, -35, -20, -35, 20, 35, 20, 35],
+            # post_center_range=[-20, -35, -20, -35, 20, 35, 20, 35],
+            post_center_range=[-55, -55, -55, -55, 55, 55, 55, 55],
             pc_range=point_cloud_range,
             max_num=50,
             voxel_size=voxel_size,
@@ -276,7 +277,7 @@ data = dict(
     train=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_map_infos_temporal_train_v2.pkl',
+        ann_file=data_root + 'nuscenes_long_range_map_infos_temporal_train_v2.pkl', # to: nuscenes_map_infos_temporal_long_range_train_v2
         pipeline=train_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -296,8 +297,8 @@ data = dict(
     val=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_map_infos_temporal_val_v2.pkl',
-        map_ann_file=data_root + 'nuscenes_map_vector_anns_val_v2.json',
+        ann_file=data_root + 'nuscenes_long_range_map_infos_temporal_val_v2.pkl', # to: nuscenes_map_infos_temporal_long_range_val_v2
+        map_ann_file=data_root + 'nuscenes_map_vector_anns_long_range_val_v2.json',
         pipeline=test_pipeline,  bev_size=(bev_h_, bev_w_),
         pc_range=point_cloud_range,
         fixed_ptsnum_per_line=fixed_ptsnum_per_gt_line,
@@ -308,8 +309,8 @@ data = dict(
     test=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_map_infos_temporal_val_v2.pkl',
-        map_ann_file=data_root + 'nuscenes_map_vector_anns_val_v2.json',
+        ann_file=data_root + 'nuscenes_long_range_map_infos_temporal_val_v2.pkl',
+        map_ann_file=data_root + 'nuscenes_map_vector_anns_long_range_val_v2.json',
         pipeline=test_pipeline, 
         bev_size=(bev_h_, bev_w_),
         pc_range=point_cloud_range,
