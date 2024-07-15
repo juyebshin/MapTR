@@ -291,7 +291,8 @@ def main():
                     # plt.Rectangle(xy, width, height,color=colors_plt[gt_label_3d])
                 # continue
             elif vis_format == 'fixed_num_pts':
-                plt.figure(figsize=(2, 4))
+                plt.figure(figsize=(4, 4) if (pc_range[3] - pc_range[0]) == (pc_range[4] - pc_range[1]) 
+                           else (2, 4))
                 plt.xlim(pc_range[0], pc_range[3])
                 plt.ylim(pc_range[1], pc_range[4])
                 plt.axis('off')
@@ -315,7 +316,8 @@ def main():
                 plt.savefig(gt_fixedpts_map_path, bbox_inches='tight', format='png',dpi=1200)
                 plt.close()   
             elif vis_format == 'polyline_pts':
-                plt.figure(figsize=(2, 4))
+                plt.figure(figsize=(4, 4) if (pc_range[3] - pc_range[0]) == (pc_range[4] - pc_range[1]) 
+                           else (2, 4))
                 plt.xlim(pc_range[0], pc_range[3])
                 plt.ylim(pc_range[1], pc_range[4])
                 plt.axis('off')
@@ -343,10 +345,11 @@ def main():
 
 
         # import pdb;pdb.set_trace()
-        plt.figure(figsize=(2, 4))
-        plt.xlim(pc_range[0], pc_range[3])
-        plt.ylim(pc_range[1], pc_range[4])
-        plt.axis('off')
+        # plt.figure(figsize=(4, 4) if (pc_range[3] - pc_range[0]) == (pc_range[4] - pc_range[1]) 
+        #             else (2, 4))
+        # plt.xlim(pc_range[0], pc_range[3])
+        # plt.ylim(pc_range[1], pc_range[4])
+        # plt.axis('off')
 
         # visualize pred
         # import pdb;pdb.set_trace()
@@ -357,7 +360,8 @@ def main():
         pts_3d = result_dic['pts_3d']
         keep = scores_3d > args.score_thresh
 
-        plt.figure(figsize=(2, 4))
+        plt.figure(figsize=(4, 4) if (pc_range[3] - pc_range[0]) == (pc_range[4] - pc_range[1]) 
+                    else (2, 4))
         plt.xlim(pc_range[0], pc_range[3])
         plt.ylim(pc_range[1], pc_range[4])
         plt.axis('off')

@@ -10,7 +10,7 @@ plugin_dir = 'projects/mmdet3d_plugin/'
 # cloud range accordingly
 # point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 point_cloud_range = [-50.0, -50.0,-10.0, 50.0, 50.0, 10.0]
-voxel_size = [0.15, 0.15, 20.0]
+voxel_size = [0.25, 0.25, 20.0]
 dbound=[1.0, 58.0, 1.0]
 
 grid_config = {
@@ -38,8 +38,8 @@ map_classes = ['divider', 'ped_crossing','boundary']
 # fixed_ptsnum_per_line = 20
 # map_classes = ['divider',]
 num_vec=50
-fixed_ptsnum_per_gt_line = 20 # now only support fixed_pts > 0
-fixed_ptsnum_per_pred_line = 20
+fixed_ptsnum_per_gt_line = 40 # now only support fixed_pts > 0
+fixed_ptsnum_per_pred_line = 40
 eval_use_same_gt_sample_num_flag=True
 num_map_classes = len(map_classes)
 
@@ -272,12 +272,12 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=2, # 4
+    samples_per_gpu=1, # 4
     workers_per_gpu=4, # TODO
     train=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_long_range_map_infos_temporal_train_v2.pkl', # to: nuscenes_map_infos_temporal_long_range_train_v2
+        ann_file=data_root + 'nuscenes_map_infos_temporal_long_range_train_v2.pkl', # to: nuscenes_map_infos_temporal_long_range_train_v2
         pipeline=train_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -297,7 +297,7 @@ data = dict(
     val=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_long_range_map_infos_temporal_val_v2.pkl', # to: nuscenes_map_infos_temporal_long_range_val_v2
+        ann_file=data_root + 'nuscenes_map_infos_temporal_long_range_val_v2.pkl', # to: nuscenes_map_infos_temporal_long_range_val_v2
         map_ann_file=data_root + 'nuscenes_map_vector_anns_long_range_val_v2.json',
         pipeline=test_pipeline,  bev_size=(bev_h_, bev_w_),
         pc_range=point_cloud_range,
@@ -309,7 +309,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_long_range_map_infos_temporal_val_v2.pkl',
+        ann_file=data_root + 'nuscenes_map_infos_temporal_long_range_val_v2.pkl',
         map_ann_file=data_root + 'nuscenes_map_vector_anns_long_range_val_v2.json',
         pipeline=test_pipeline, 
         bev_size=(bev_h_, bev_w_),
@@ -326,7 +326,7 @@ data = dict(
 
 optimizer = dict(
     type='AdamW',
-    lr=6e-4,
+    lr=2e-4,
     paramwise_cfg=dict(
         custom_keys={
             'img_backbone': dict(lr_mult=0.1),
